@@ -1,4 +1,4 @@
-import { rgbToTomodachiHSV, type RGBColor } from "./color";
+import { rgbToTomodachiHSV, TOMODACHI_HSV_H_TICKS, TOMODACHI_HSV_S_TICKS, TOMODACHI_HSV_V_TICKS, type RGBColor } from "./color";
 
 export type MacroGenerator = (
   w: number,
@@ -354,16 +354,69 @@ const createZigMacroScriptContext = (
       context.wait(100);
       context.tap('Y');
       context.wait(100);
-      context.resetHSVColorPanel();
+
+      context.comment('--- 复位 HSV 调色板 ---');
       context.wait(100);
-      context.tapMultiple('ZR', hsv.hTicks);
+      let stickX = "";
+      let stickY = "";
+      let hResetButton = "";
+      let hButton = "";
+      let sButton = "";
+      let vButton = "";
+      if (hsv.hTicks * 2 <= TOMODACHI_HSV_H_TICKS) {
+        hResetButton = "ZL";
+        hButton = "ZR";
+      } else {
+        hResetButton = "ZR";
+        hButton = "ZL";
+        hsv.hTicks = TOMODACHI_HSV_H_TICKS - hsv.hTicks;
+      }
+      if (hsv.sTicks * 2 < TOMODACHI_HSV_S_TICKS) {
+        stickX = "-";
+        sButton = "DPAD_RIGHT";
+      } else {
+        stickX = "+";
+        sButton = "DPAD_LEFT";
+        hsv.sTicks = TOMODACHI_HSV_S_TICKS - hsv.sTicks;
+      }
+      if (hsv.vTicks * 2 < TOMODACHI_HSV_V_TICKS) {
+        stickY = "+"
+        vButton = "DPAD_DOWN";
+      } else {
+        stickY = "-"
+        vButton = "DPAD_UP";
+        hsv.vTicks = TOMODACHI_HSV_V_TICKS - hsv.vTicks;
+      }
+      context.lines.push(`STICK LEFT_STICK ${stickX}100 ${stickY}100`);
+      // // 左上
+      // context.lines.push('STICK LEFT_STICK -100 +100');
+      // // 左下
+      // context.lines.push('STICK LEFT_STICK -100 -100');
+      // // 右上
+      // context.lines.push('STICK LEFT_STICK +100 +100');
+      // // 右下
+      // context.lines.push('STICK LEFT_STICK +100 -100');
       context.wait(100);
-      context.tapMultiple('DPAD_RIGHT', hsv.sTicks);
+      context.lines.push(`DOWN ${hResetButton}`);
+      context.wait(5000);
+      context.lines.push(`UP ${hResetButton}`);
       context.wait(100);
-      context.tapMultiple('DPAD_DOWN', hsv.vTicks);
+      context.lines.push('RESET_STICK LEFT_STICK');
+      context.wait(100);
+      context.comment('--- 复位 HSV 调色板完毕 ---');
+
+      context.wait(100);
+
+      context.comment('--- 调色 ---');
+      context.tapMultiple(hButton, hsv.hTicks);
+      context.wait(100);
+      context.tapMultiple(sButton, hsv.sTicks);
+      context.wait(100);
+      context.tapMultiple(vButton, hsv.vTicks);
       context.wait(100);
       context.tap('A');
       context.wait(100);
+      context.comment('--- 调色完毕 ---');
     },
 
     goto: (direction, times) => context.tapMultiple(direction, times),

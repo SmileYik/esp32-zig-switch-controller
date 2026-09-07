@@ -45,12 +45,18 @@ export function splitScriptMacro(scriptText: string, chunkSize: number = 100): U
   
     return groups;
   }
+
+  export interface RunScriptCallbackRet {
+    stop: boolean,
+    specialIdx?: number,
+  }
   
   export interface RunScriptOptions {
     /** 每组的最大行数，默认为 100 */
     chunkSize?: number;
     start?: number;
-    callback?: (total: number, idx: number, bytecode: Uint8Array, opt: RunScriptOptions) => Promise<boolean>,
+    startCallback?: (total: number, idx: number, opt: RunScriptOptions) => Promise<void>
+    callback?: (total: number, idx: number, bytecode: Uint8Array, opt: RunScriptOptions) => Promise<RunScriptCallbackRet>,
     finshCallback?: () => void,
     retryWaitTime?: number,
     sleep?: (ms: number) => Promise<void>,
@@ -69,7 +75,8 @@ export function splitScriptMacro(scriptText: string, chunkSize: number = 100): U
     const {
       chunkSize = 100,
       start = 0,
-      callback = async (_) => false,
+      startCallback = async (_) => {},
+      callback = async (_) => ({stop: false, specialIdx: undefined}),
       retryWaitTime = 30000,
       finshCallback = () => {},
       sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
@@ -85,14 +92,17 @@ export function splitScriptMacro(scriptText: string, chunkSize: number = 100): U
       finshCallback: finshCallback,
       sleep: sleep,
     } as RunScriptOptions;
+
+    await startCallback(groups.length, start, opts);
   
     // 2. 依次同步（串行）调用 POST 请求
     for (let i = start; i < groups.length; i++) {
-      console.log(`正在发送第 ${i + 1}/${groups.length} 组...`);
-      
       const bytecode = groups[i];
-      const flag = await callback(groups.length, i, bytecode, opts)
-      if (flag) break; 
+      const ret = await callback(groups.length, i, bytecode, opts)
+      if (ret.stop) break;
+      if (ret.specialIdx !== undefined) {
+        i = ret.specialIdx - 1;
+      } 
     }
     finshCallback();
     console.log('所有分组宏脚本已全部执行完成');

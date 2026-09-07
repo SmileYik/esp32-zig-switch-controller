@@ -29,6 +29,11 @@ export interface CmdQueueConfig {
   cap: number;
 }
 
+export interface CmdQueueInit {
+  idx: number;
+  total: number;
+}
+
 export interface ApiResponse<T = any> {
   code: number;
   msg: string;
@@ -162,12 +167,22 @@ export class Esp32Client {
   }
 
   /** 将字节码入队（异步执行） */
-  async enqueueCommand(bytecode: Uint8Array): Promise<ApiResponse<null>> {
-    return this.request<null>('/cmd/queue', {
+  async enqueueCommandInit(init: CmdQueueInit): Promise<ApiResponse<null>> {
+    return this.request<null>('/cmd/queue/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(init),
+    });
+  }
+
+  /** 将字节码入队（异步执行） */
+  async enqueueCommand(idx: number, bytecode: Uint8Array): Promise<number> {
+    const result = await this.request<number>(`/cmd/queue&idx=${idx}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/octet-stream' },
       body: bytecode.buffer as ArrayBuffer,
     });
+    return result.data;
   }
 
   /** 同步执行字节码 */
@@ -209,4 +224,4 @@ export class Esp32Client {
 }
 
 // 导出单例，默认使用相对路径访问同一域名下的设备 API
-export const esp32Api = new Esp32Client("http://192.168.133.209");
+export const esp32Api = new Esp32Client();

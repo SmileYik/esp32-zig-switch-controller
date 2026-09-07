@@ -28,9 +28,14 @@ const Self = @This();
 allocator: std.mem.Allocator,
 heap: *idf.heap.HeapCapsAllocator,
 controller: *mod.controller.Controller,
+wifi: *mod.wifi.WifiManager,
+
 queue: Queue,
 queue_capacity: u8 = QUEUE_CAPACITY_INIT,
-wifi: *mod.wifi.WifiManager,
+// expect
+queue_init: std.atomic.Value(bool) = .init(false),
+queue_expect_idx: std.atomic.Value(u32) = .init(0),
+queue_total: u32 = 0,
 
 uris: [4]mod.http.Uri = [_]mod.http.Uri{
     .{
@@ -337,6 +342,13 @@ export fn consumeByteCode(ctx: ?*anyopaque) callconv(.c) void {
             var bytecode = item.value;
             defer bytecode.deinit();
 
+            if (self.queue_init.load(.acquire)) {
+                if (self.queue.spacesAvailable() == QUEUE_CAPACITY) {
+                    self.queue_init.store(false, .release);
+                }
+                continue;
+            }
+
             if (self.controller.heartbeat) {
                 self.controller.setHeartbeat(false);
                 defer self.controller.setHeartbeat(true);
@@ -363,6 +375,7 @@ export fn consumeByteCode(ctx: ?*anyopaque) callconv(.c) void {
 
 const POSTS = .{
     .{ "/cmd/queue", &postCommandEnqueue },
+    .{ "/cmd/queue/init", &postCommandQueueInit },
     .{ "/cmd/run", &postCommandRunSync },
     .{ "/cmd/run/raw", &postCommandRunSyncRaw },
     .{ "/cmd/test", &postCommandTest },
@@ -410,7 +423,7 @@ fn postCmdQueueConfig(self: *Self, req: [*c]mod.http.Req) !void {
             .{ .ignore_unknown_fields = true },
         ) catch |e| {
             self.logError("parsed-body-failed", e);
-            return error.ParseWifiConfigFailed;
+            return error.ParseCmdQueueConfigFailed;
         };
         defer parsed.deinit();
 
@@ -482,8 +495,57 @@ fn postCommandRunSync(self: *Self, req: [*c]mod.http.Req) !void {
     return error.RequestBodyIsNotValid;
 }
 
-/// POST /cmd/queue
+/// POST /cmd/queue/init
+fn postCommandQueueInit(self: *Self, req: [*c]mod.http.Req) !void {
+    const QueueInit = struct {
+        idx: u32,
+        total: u32,
+    };
+
+    var body_buffer: [64]u8 = undefined;
+    if (try self.readBody(&body_buffer, req)) |body| {
+        var parsed = std.json.parseFromSlice(
+            QueueInit,
+            self.allocator,
+            body,
+            .{ .ignore_unknown_fields = true },
+        ) catch |e| {
+            self.logError("parsed-body-failed", e);
+            return error.ParseCommandQueueInitFailed;
+        };
+        defer parsed.deinit();
+
+        self.queue_expect_idx.store(parsed.value.idx, .release);
+        self.queue_total = parsed.value.total;
+        if (self.queue.spacesAvailable() != QUEUE_CAPACITY)
+            self.queue_init.store(true, .release);
+        self.sendStructAsJson(req, null, "success");
+    }
+    return error.RequestBodyIsNotValid;
+}
+
+/// POST /cmd/queue?idx={idx}
 fn postCommandEnqueue(self: *Self, req: [*c]mod.http.Req) !void {
+    var query: [64:0]u8 = undefined;
+    var idx_c: [16:0]u8 = undefined;
+    @memset(&query, 0);
+    @memset(&idx_c, 0);
+
+    try idf.http.Server.Request.getUrlQueryStr(req, &query, query.len);
+    try idf.http.Server.queryKeyValue(&query, "idx", &idx_c, idx_c.len);
+
+    if (self.queue_init.load(.acquire)) {
+        return error.QueueIniting;
+    }
+
+    const idx = try std.fmt.parseInt(u32, std.mem.sliceTo(&idx_c, 0), 10);
+    if (self.queue_expect_idx.load(.acquire) != idx) {
+        @memset(&idx_c, 0);
+        const expect = try std.fmt.bufPrint(&idx_c, "{d}", .{self.queue_expect_idx.load(.acquire)});
+        self.sendStructAsJson(req, expect, "resync");
+        return;
+    }
+
     var body_buffer: [MAX_BODY_SIZE]u8 = undefined;
     if (try self.readBody(&body_buffer, req)) |body| {
         if (QUEUE_CAPACITY - self.queue.spacesAvailable() >= self.queue_capacity) {
@@ -508,8 +570,10 @@ fn postCommandEnqueue(self: *Self, req: [*c]mod.http.Req) !void {
                     return error.EnqueueError;
                 },
             };
-
-        self.sendStructAsJson(req, null, "enqueued!");
+        _ = self.queue_expect_idx.fetchAdd(1, .release);
+        @memset(&idx_c, 0);
+        const expect = try std.fmt.bufPrint(&idx_c, "{d}", .{self.queue_expect_idx.load(.acquire)});
+        self.sendStructAsJson(req, expect, "enqueued!");
     }
     return error.RequestBodyIsNotValid;
 }

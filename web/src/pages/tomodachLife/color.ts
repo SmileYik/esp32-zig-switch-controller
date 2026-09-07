@@ -5,6 +5,9 @@ export type TomodachiHSV = {
   sTicks: number;
   vTicks: number;
 };
+export const TOMODACHI_HSV_H_TICKS = 201;
+export const TOMODACHI_HSV_S_TICKS = 212;
+export const TOMODACHI_HSV_V_TICKS = 111;
 
 export const rgbToHex = (c: RGBColor) =>
   '#' + [c.r, c.g, c.b].map((x) => x.toString(16).padStart(2, '0')).join('');

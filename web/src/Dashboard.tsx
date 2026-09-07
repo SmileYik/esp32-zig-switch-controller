@@ -272,7 +272,7 @@ interface CommandRunnerCardProps {
   onRun: () => void;
   executing: boolean;
   onRunBytecode: (script: string) => void;
-  onEnqueue: (chunkSize: number) => void;
+  onEnqueue: (chunkSize: number, waitTime: number) => void;
   onStopEnqueue: () => void;
   currentGroupIdx: number,
   totalGroups: number,
@@ -294,6 +294,7 @@ const CommandRunnerCard: React.FC<CommandRunnerCardProps> = ({
   type ButtonType = 'raw' | 'bytecode' | 'enqueue' | 'l-r' | 'a' | 'l-r-a';
   const [clickedButtonType, setClickedButtonType] = useState<ButtonType>("raw");
   const [groupSize, setGroupSize] = useState<number>(200);
+  const [waitTime, setWaitTime] = useState<number>(30000);
 
   const bytecode = compile(rawScript);
   let formatted = "";
@@ -408,7 +409,6 @@ const CommandRunnerCard: React.FC<CommandRunnerCardProps> = ({
                     style={{width: "80px"}}
                     value={currentGroupIdx}
                     min={1}
-                    max={totalGroups}
                     onChange={e => setGroupIdx(parseInt(e.target.value) || 1)}
                   ></input>
                     / {totalGroups}
@@ -425,13 +425,27 @@ const CommandRunnerCard: React.FC<CommandRunnerCardProps> = ({
                   onChange={e => setGroupSize(parseInt(e.target.value) || 200)}
                 ></input>
               </label>
+
+              <label className="m3-input-field">
+                等待: 
+                <input 
+                  type="number" 
+                  className="m3-input" 
+                  value={waitTime}
+                  min={1000}
+                  onChange={e => setWaitTime(parseInt(e.target.value) || 30000)}
+                  style={{maxWidth: "60%"}}
+                ></input>
+                ms
+              </label>
+
               {(!executing || clickedButtonType === 'enqueue') &&
                 <button
                   onClick={() => {
                     if (executing) {
                       onStopEnqueue();
                     } else {
-                      onEnqueue(groupSize); 
+                      onEnqueue(groupSize, waitTime); 
                       setClickedButtonType('enqueue');
                     }
                   }}
@@ -681,7 +695,7 @@ export const Dashboard: React.FC = () => {
     stopExecuting.current = true;
   };
 
-  const handleEnqueueBytecode = async (chunkSize: number = 200) => {
+  const handleEnqueueBytecode = async (chunkSize: number = 200, waitTime: number = 30000) => {
     if (!rawScript.trim()) return;
     setExecutingCmd(true);
     stopExecuting.current = false;
@@ -690,18 +704,34 @@ export const Dashboard: React.FC = () => {
       const script = rawScript.trim();
       await runScriptMacroInGroups(script, {
         start: groupIdx,
+        retryWaitTime: waitTime,
+        startCallback: async (total, idx, opts) => {
+          while (true) {
+            console.log(`正在发送第 ${idx + 1}/${total} 组...`);
+            try {
+              await esp32Api.enqueueCommandInit({total, idx});
+              setStatusMessage({ text: `初始化队列信息 ${idx + 1}/${total}.`, isError: false });
+              break;
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : '执行失败';
+              setStatusMessage({ text: `初始化队列信息 ${idx + 1}/${total} 失败: ${msg}, ${opts.retryWaitTime}ms 后重试`, isError: true });
+              if (opts.sleep)
+                await opts.sleep(opts.retryWaitTime || 30000);
+            }
+          }
+        },
         callback: async (groupSize, idx, bytecode, opts) => {
           setGroupIdx(idx);
           setTotalGroups(groupSize);
           while (true) {
             if (stopExecuting.current) {
-              return true;
+              return {stop: true};
             }
 
             try {
-              await esp32Api.enqueueCommand(bytecode);
-              setStatusMessage({ text: `第 ${idx + 1} 组字节码已入队`, isError: true });
-              break;
+              const next_idx = await esp32Api.enqueueCommand(idx, bytecode);
+              setStatusMessage({ text: `第 ${idx + 1} 组字节码已入队, 下一次期待收到第 ${next_idx + 1} 组字节码.`, isError: false });
+              return {stop: false, specialIdx: next_idx};
             } catch (err: unknown) {
               const msg = err instanceof Error ? err.message : '执行失败';
               setStatusMessage({ text: `字节码入队失败: ${msg}, ${opts.retryWaitTime}ms 后重试`, isError: true });
@@ -709,7 +739,6 @@ export const Dashboard: React.FC = () => {
                 await opts.sleep(opts.retryWaitTime || 30000);
             }
           }
-          return false;
         },
         chunkSize: chunkSize,
         finshCallback: () => {
