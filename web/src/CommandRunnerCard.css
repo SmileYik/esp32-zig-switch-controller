@@ -1,0 +1,23 @@
+/* Layout Grid */
+.m3-command-runner-grid {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 24px;
+}
+
+@media (max-width: 840px) {
+  .m3-command-runner-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.m3-simple-card {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--md-color-outline-variant);
+}
+
+.m3-simple-card-title {
+  margin: 0 0 8px 0; 
+  font-size: 14px;
+}

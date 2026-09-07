@@ -551,7 +551,7 @@ function TomodachiLifeNormal({
               </div>
 
               {/* 右侧脚本输出区 */}
-              <div className="m3-card">
+              <div className="m3-card" style={{display: "flex", flexDirection: "column"}}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                   <h3 className="m3-card-title" style={{ margin: 0 }}>宏脚本</h3>
                   <div style={{ display: 'flex', gap: '8px' }}>

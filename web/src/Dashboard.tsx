@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { esp32Api, ApiError } from './api';
 import type { MemoryStatus, QueueStatus, WifiConfig } from './api';
 import './Dashboard.css';
+import './CommandRunnerCard.css';
 import { calculateBytecodeWaitTime, compile } from './macroCompiler';
 import { runScriptMacroInGroups } from './runner';
 import TomodachiLifeNormal from './pages/tomodachLife/TomodachiLifeNormal';
@@ -109,22 +110,74 @@ const HeartbeatCard: React.FC<HeartbeatCardProps> = ({ heartbeat, onToggle, exec
 interface QueueCardProps {
   queue: QueueStatus | null;
   usagePct: number;
+  setStatusMessage: (msg: {
+      text: string;
+      isError: boolean;
+  }) => void;
 }
-const QueueCard: React.FC<QueueCardProps> = ({ queue, usagePct }) => (
-  <div className="card-surface">
-    <div className="card-header-row">
-      <Icons.Queue />
-      <span className="status-text">{usagePct}% 负载</span>
+const QueueCard: React.FC<QueueCardProps> = ({ 
+  queue, 
+  usagePct,
+  setStatusMessage,
+}) => {
+  const [showModal, setShowModal] = useState<boolean>(false);
+  const [capacity, setCapacity] = useState<number>(32);
+
+  const onSubmit = async (e: React.SubmitEvent) => {
+    e.preventDefault();
+    try {
+      await esp32Api.setCmdQueueConfig({cap: capacity});
+      setShowModal(false);
+      setStatusMessage({ text: `配置成功`, isError: false });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '保存失败';
+      setStatusMessage({ text: `Wi-Fi 配置更新失败: ${msg}`, isError: true });
+    }
+  };
+
+  return (<>
+    <div className="card-surface">
+      <div className="card-header-row">
+        <Icons.Queue />
+        <span className='edit-btn status-text' onClick={() => setShowModal(true)}>{usagePct}% 负载</span>
+      </div>
+      <div className="card-label">命令队列容量</div>
+      <div className="card-value">
+        {queue ? `${queue.total - queue.available} / ${queue.total}` : '--'}
+      </div>
+      <div className="progress-bar-track">
+        <div className={getProgressClass(usagePct)} style={{ width: `${usagePct}%` }} />
+      </div>
     </div>
-    <div className="card-label">命令队列容量</div>
-    <div className="card-value">
-      {queue ? `${queue.total - queue.available} / ${queue.total}` : '--'}
-    </div>
-    <div className="progress-bar-track">
-      <div className={getProgressClass(usagePct)} style={{ width: `${usagePct}%` }} />
-    </div>
-  </div>
-);
+    {showModal && (
+      <div className="modal-overlay">
+        <form onSubmit={onSubmit} className="modal-dialog">
+          <h3 className="modal-title">配置命令队列</h3>
+
+          <div className="modal-group">
+            <h4 className="modal-group-title">队列容量</h4>
+            <input
+              type="number"
+              placeholder="AP SSID"
+              value={capacity}
+              onChange={(e) => setCapacity(parseInt(e.target.value) || 32)}
+              className="modal-input"
+            />
+          </div>
+
+          <div className="modal-actions">
+            <button type="button" onClick={() => setShowModal(false)} className="modal-cancel-btn">
+              取消
+            </button>
+            <button type="submit" className="modal-submit-btn">
+              保存并生效
+            </button>
+          </div>
+        </form>
+      </div>
+    )}
+  </>);
+}
 
 /** 内存（Heap）状态卡片 */
 interface MemoryCardProps {
@@ -223,6 +276,7 @@ interface CommandRunnerCardProps {
   onStopEnqueue: () => void;
   currentGroupIdx: number,
   totalGroups: number,
+  setGroupIdx: (idx: number) => void,
 }
 const CommandRunnerCard: React.FC<CommandRunnerCardProps> = ({
   rawScript,
@@ -234,10 +288,12 @@ const CommandRunnerCard: React.FC<CommandRunnerCardProps> = ({
   currentGroupIdx,
   totalGroups,
   executing,
+  setGroupIdx,
 }) => {
 
   type ButtonType = 'raw' | 'bytecode' | 'enqueue' | 'l-r' | 'a' | 'l-r-a';
   const [clickedButtonType, setClickedButtonType] = useState<ButtonType>("raw");
+  const [groupSize, setGroupSize] = useState<number>(200);
 
   const bytecode = compile(rawScript);
   let formatted = "";
@@ -248,7 +304,7 @@ const CommandRunnerCard: React.FC<CommandRunnerCardProps> = ({
 
   return (
     <div className="command-section">
-      <div className="section-header">
+      <div className="section-header" style={{marginBottom: "16px"}}>
         <Icons.Code />
         <h2 className="section-title">快速运行宏脚本</h2>
         {rawScript.trim() && (
@@ -256,84 +312,139 @@ const CommandRunnerCard: React.FC<CommandRunnerCardProps> = ({
         )}
       </div>
 
-      <textarea
-        rows={4}
-        value={rawScript}
-        onChange={(e) => onChangeScript(e.target.value)}
-        placeholder="在此输入需要同步解析运行的指令脚本..."
-        className="script-textarea"
-      />
+      <div className="m3-command-runner-grid" >
+        <div className="m3-card" style={{display: "flex", flexDirection: "column"}}>
+          <h3 className="m3-card-title" style={{ textAlign: 'center' }}>
+            宏脚本
+          </h3>
+          
+          <textarea
+            style={{height: "100%"}}
+            value={rawScript}
+            onChange={(e) => onChangeScript(e.target.value)}
+            placeholder="在此输入需要同步解析运行的指令脚本..."
+            className="script-textarea m3-code-block"
+          />
+        </div>
 
+        <div className="m3-card" style={{display: "flex", flexDirection: "column"}}>
+          <h3 className="m3-card-title" style={{ textAlign: 'center' }}>
+            操作栏
+          </h3>
 
-      <div className="action-row-right">
+          <div className="m3-simple-card">
+            <h4 className='m3-simple-card-title'>基础指令</h4>
 
-        {(!executing || clickedButtonType === 'l-r') &&
-          <button
-            onClick={() => {
-              onRunBytecode("TAP 70ms 70ms L R"); 
-              setClickedButtonType('l-r');
-            }}
-            disabled={executing}
-            title='同时按下 L-R'
-            className="primary-action-btn"
-          >
-            {executing ? '执行中...' : '同时按下 L-R'}
-          </button>
-        }
-
-        {(!executing || clickedButtonType === 'a') &&
-          <button
-            onClick={() => {
-              onRunBytecode("TAP 70ms 70ms A"); 
-              setClickedButtonType('a');
-            }}
-            disabled={executing}
-            title='按下 A'
-            className="primary-action-btn"
-          >
-            {executing ? '执行中...' : '按下 A'}
-          </button>
-        }
-
-        {(!executing || clickedButtonType === 'bytecode') &&
-          <button
-            onClick={() => {onRunBytecode(rawScript); setClickedButtonType('bytecode')}}
-            disabled={executing || !rawScript.trim()}
-            title='将脚本编译成字节码后立即同步运行'
-            className="primary-action-btn"
-          >
-            {executing ? `执行中...` : '编译并运行'}
-          </button>
-        }
-
-        {(!executing || clickedButtonType === 'raw') &&
-          <button
-            onClick={() => {onRun(); setClickedButtonType('raw');}}
-            disabled={executing || !rawScript.trim()}
-            title='直接同步运行所输入的脚本'
-            className="primary-action-btn"
-          >
-            {executing ? '执行中...' : '发送并同步运行'}
-          </button>
-        }
-
-        {(!executing || clickedButtonType === 'enqueue') &&
-          <button
-            onClick={() => {
-              if (executing) {
-                onStopEnqueue();
-              } else {
-                onEnqueue(200); 
-                setClickedButtonType('enqueue');
+            <div style={{display: "flex", flexDirection: "column", gap: "4px"}}>
+              {(!executing || clickedButtonType === 'l-r') &&
+                <button
+                  onClick={() => {
+                    onRunBytecode("TAP 100ms 100ms L R"); 
+                    setClickedButtonType('l-r');
+                  }}
+                  disabled={executing}
+                  title='同时按下 L-R'
+                  className="m3-btn m3-btn-tonal"
+                >
+                  {executing ? '执行中...' : '同时按下 L-R'}
+                </button>
               }
-            }}
-            disabled={!rawScript.trim()}
-            title='将脚本分批编译并入队等待运行'
-            className="primary-action-btn"
-          >
-            {executing ? `执行中(${currentGroupIdx + 1}/${totalGroups})... 取消执行...` : '分批入队运行'}
-          </button>
-        }
+
+              {(!executing || clickedButtonType === 'a') &&
+                <button
+                  onClick={() => {
+                    onRunBytecode("TAP 100ms 100ms A"); 
+                    setClickedButtonType('a');
+                  }}
+                  disabled={executing}
+                  title='按下 A'
+                  className="m3-btn m3-btn-tonal"
+                >
+                  {executing ? '执行中...' : '按下 A'}
+                </button>
+              }
+            </div>
+          </div>
+
+          <div className="m3-simple-card">
+            <h4 className='m3-simple-card-title'>同步运行</h4>
+
+            <div style={{display: "flex", flexDirection: "column", gap: "4px"}}>
+              {(!executing || clickedButtonType === 'bytecode') &&
+                <button
+                  onClick={() => {onRunBytecode(rawScript); setClickedButtonType('bytecode')}}
+                  disabled={executing || !rawScript.trim()}
+                  title='将脚本编译成字节码后立即同步运行'
+                  className="m3-btn m3-btn-tonal"
+                >
+                  {executing ? `执行中...` : '编译并运行'}
+                </button>
+              }
+
+              {(!executing || clickedButtonType === 'raw') &&
+                <button
+                  onClick={() => {onRun(); setClickedButtonType('raw');}}
+                  disabled={executing || !rawScript.trim()}
+                  title='直接同步运行所输入的脚本'
+                  className="m3-btn m3-btn-tonal"
+                >
+                  {executing ? '执行中...' : '发送并同步运行'}
+                </button>
+              }
+            </div>
+          </div>
+
+
+          <div className="m3-simple-card">
+            <h4 className='m3-simple-card-title'>队列运行</h4>
+
+            <div style={{display: "flex", flexDirection: "column", gap: "4px"}}>
+              <label className="m3-input-field">
+                分组: 
+                <span className="m3-input-field">
+                  <input 
+                    type="number" 
+                    className="m3-input" 
+                    style={{width: "80px"}}
+                    value={currentGroupIdx}
+                    min={1}
+                    max={totalGroups}
+                    onChange={e => setGroupIdx(parseInt(e.target.value) || 1)}
+                  ></input>
+                    / {totalGroups}
+                </span>
+                
+              </label>
+
+              <label className="m3-input-field">
+                分片: 
+                <input 
+                  type="number" 
+                  className="m3-input" 
+                  value={groupSize}
+                  onChange={e => setGroupSize(parseInt(e.target.value) || 200)}
+                ></input>
+              </label>
+              {(!executing || clickedButtonType === 'enqueue') &&
+                <button
+                  onClick={() => {
+                    if (executing) {
+                      onStopEnqueue();
+                    } else {
+                      onEnqueue(groupSize); 
+                      setClickedButtonType('enqueue');
+                    }
+                  }}
+                  disabled={!rawScript.trim()}
+                  title='将脚本分批编译并入队等待运行'
+                  className="m3-btn m3-btn-tonal"
+                >
+                  {executing ? `取消执行...` : '分批入队运行'}
+                </button>
+              }
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -584,7 +695,6 @@ export const Dashboard: React.FC = () => {
           setTotalGroups(groupSize);
           while (true) {
             if (stopExecuting.current) {
-              setGroupIdx(0);
               return true;
             }
 
@@ -666,7 +776,7 @@ export const Dashboard: React.FC = () => {
         <div className="top-summary-grid">
           <IpCard ip={ip} />
           <HeartbeatCard heartbeat={heartbeat} onToggle={handleToggleHeartbeat} executingCmd={executingCmd} />
-          <QueueCard queue={queue} usagePct={queueUsagePct} />
+          <QueueCard queue={queue} usagePct={queueUsagePct} setStatusMessage={setStatusMessage} />
         </div>
 
         {/* Detailed Sections Grid */}
@@ -684,8 +794,9 @@ export const Dashboard: React.FC = () => {
           onStopEnqueue={handleStopEnqueue}
           onRunBytecode={handleRunBytecode}
           totalGroups={totalGroups}
-          currentGroupIdx={groupIdx}
+          currentGroupIdx={groupIdx + 1}
           executing={executingCmd}
+          setGroupIdx={idx => setGroupIdx(Math.max(0, idx - 1))}
         />
 
         <div className="command-section">

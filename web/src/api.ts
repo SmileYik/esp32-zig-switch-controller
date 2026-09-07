@@ -25,6 +25,10 @@ export interface MemoryStatus {
   mininumFree: number;
 }
 
+export interface CmdQueueConfig {
+  cap: number;
+}
+
 export interface ApiResponse<T = any> {
   code: number;
   msg: string;
@@ -139,6 +143,15 @@ export class Esp32Client {
   // 4. POST 方法集
   // ==========================================
 
+  /** 更新命令队列配置 */
+  async setCmdQueueConfig(config: CmdQueueConfig): Promise<ApiResponse<null>> {
+    return this.request<null>('/cfg/queue/cmd', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+  }
+
   /** 更新 Wi-Fi 配置 */
   async setWifiConfig(config: WifiConfig): Promise<ApiResponse<null>> {
     return this.request<null>('/cfg/wifi', {
@@ -149,13 +162,12 @@ export class Esp32Client {
   }
 
   /** 将字节码入队（异步执行） */
-  async enqueueCommand(bytecode: Uint8Array): Promise<QueueStatus> {
-    const res = await this.request<QueueStatus>('/cmd/queue', {
+  async enqueueCommand(bytecode: Uint8Array): Promise<ApiResponse<null>> {
+    return this.request<null>('/cmd/queue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/octet-stream' },
       body: bytecode.buffer as ArrayBuffer,
     });
-    return res.data;
   }
 
   /** 同步执行字节码 */
@@ -197,4 +209,4 @@ export class Esp32Client {
 }
 
 // 导出单例，默认使用相对路径访问同一域名下的设备 API
-export const esp32Api = new Esp32Client();
+export const esp32Api = new Esp32Client("http://192.168.133.209");

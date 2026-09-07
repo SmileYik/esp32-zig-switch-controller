@@ -47,6 +47,147 @@ body {
   color: var(--md-sys-color-on-surface);
 }
 
+
+.m3-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px 24px;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: var(--md-color-on-surface);
+  background-color: var(--md-color-surface);
+  min-height: 100vh;
+  box-sizing: border-box;
+}
+
+/* Header & Title */
+.m3-header {
+  margin-bottom: 24px;
+  text-align: center;
+}
+
+.m3-header h1 {
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: var(--md-color-on-surface);
+  margin: 0 0 16px 0;
+}
+
+/* MD3 Card Layout */
+.m3-card {
+  background-color: var(--md-color-surface-container);
+  border-radius: var(--md-radius-l);
+  padding: 24px;
+  margin-bottom: 24px;
+  border: 1px solid var(--md-color-outline-variant);
+  transition: box-shadow 0.2s ease;
+}
+
+.m3-card-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin: 0 0 16px 0;
+  color: var(--md-color-on-surface);
+}
+
+/* Form Controls & Inputs */
+.m3-controls-bar {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.m3-input-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--md-color-on-surface-variant);
+}
+
+.m3-input {
+  background: var(--md-color-surface);
+  border: 1px solid var(--md-color-outline);
+  border-radius: var(--md-radius-s);
+  padding: 6px 10px;
+  color: var(--md-color-on-surface);
+  outline: none;
+  font-size: 0.875rem;
+}
+
+.m3-input:focus {
+  border-color: var(--md-color-primary);
+  border-width: 2px;
+}
+
+.m3-code-block {
+  width: 100%;
+  height: 100%;
+  font-family: 'Fira Code', Consolas, monospace;
+  font-size: 12px;
+  color: var(--md-sys-color-primary);
+  background-color: var(--md-sys-color-surface-container-low);
+  padding: 16px;
+  border-radius: var(--md-radius-m);
+  border: 1px solid var(--md-color-outline-variant);
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+/* MD3 Buttons */
+.m3-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--md-radius-full);
+  padding: 10px 20px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.m3-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.m3-btn-filled {
+  background-color: var(--md-color-primary);
+  color: var(--md-color-on-primary);
+}
+
+.m3-btn-filled:hover {
+  box-shadow: var(--md-shadow-1);
+  opacity: 0.92;
+}
+
+.m3-btn-filled:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.m3-btn-tonal {
+  background-color: var(--md-color-primary-container);
+  color: var(--md-color-on-primary-container);
+}
+
+.m3-btn-outlined {
+  background-color: transparent;
+  border: 1px solid var(--md-color-outline);
+  color: var(--md-color-primary);
+}
+
+.m3-btn-danger {
+  background-color: var(--md-color-error-container);
+  color: var(--md-color-on-error-container);
+}
+
+
 /* Page Container */
 .page-container {
   min-height: 100vh;
