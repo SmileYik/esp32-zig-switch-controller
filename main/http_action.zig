@@ -8,7 +8,8 @@ const runner = mod.controller.command.runner;
 const CommandRunner = runner.CommandRunner(runner.CallStackStatic(8));
 
 const MAX_BODY_SIZE = 4096;
-const QUEUE_CAPACITY = 16;
+pub const QUEUE_CAPACITY = 255;
+pub const QUEUE_CAPACITY_INIT = 24;
 const Queue = mod.Queue(ByteCode, QUEUE_CAPACITY);
 
 const log = std.log.scoped(.http_action);
@@ -28,7 +29,7 @@ allocator: std.mem.Allocator,
 heap: *idf.heap.HeapCapsAllocator,
 controller: *mod.controller.Controller,
 queue: Queue,
-queue_capacity: u8 = QUEUE_CAPACITY,
+queue_capacity: u8 = QUEUE_CAPACITY_INIT,
 wifi: *mod.wifi.WifiManager,
 
 uris: [4]mod.http.Uri = [_]mod.http.Uri{
@@ -110,6 +111,9 @@ fn dispatchAction(
     req: [*c]mod.http.Req,
     comptime actions: anytype,
 ) !void {
+    idf.http.Server.Response.setHDR(req, "Access-Control-Allow-Headers", "*") catch {};
+    idf.http.Server.Response.setHDR(req, "Access-Control-Allow-Origin", "*") catch {};
+
     var query: [64:0]u8 = undefined;
     var action_buf: [16:0]u8 = undefined;
     @memset(&query, 0);
@@ -244,8 +248,6 @@ fn sendStructAsJsonInner(
         0,
     );
 
-    try idf.http.Server.Response.setHDR(req, "Access-Control-Allow-Origin", "*");
-    try idf.http.Server.Response.setHDR(req, "Access-Control-Allow-Headers", "*");
     try idf.http.Server.Response.setHDR(req, "content-type", "application/json");
     try idf.http.Server.Response.sendStr(req, json);
 }
@@ -365,15 +367,13 @@ const POSTS = .{
     .{ "/cmd/run/raw", &postCommandRunSyncRaw },
     .{ "/cmd/test", &postCommandTest },
     .{ "/cfg/wifi", &postWifiConfig },
+    .{ "/cfg/queue/cmd", &postCmdQueueConfig },
     .{ "/cmd/hb/on", &postControllerHeartbeatOn },
     .{ "/cmd/hb/off", &postControllerHeartbeatOff },
 };
 
 /// POST /cfg/wifi
 fn postWifiConfig(self: *Self, req: [*c]mod.http.Req) !void {
-    self.logMemory();
-    defer self.logMemory();
-
     var body_buffer: [256]u8 = undefined;
     if (try self.readBody(&body_buffer, req)) |body| {
         var parsed = std.json.parseFromSlice(
@@ -392,6 +392,30 @@ fn postWifiConfig(self: *Self, req: [*c]mod.http.Req) !void {
             return error.StoreWifiConfigFailed;
         };
         self.sendStructAsJson(req, null, "configurate wifi success");
+    }
+    return error.RequestBodyIsNotValid;
+}
+
+/// POST /cfg/queue/cmd
+fn postCmdQueueConfig(self: *Self, req: [*c]mod.http.Req) !void {
+    var body_buffer: [64]u8 = undefined;
+    if (try self.readBody(&body_buffer, req)) |body| {
+        const CmdQueueConfig = struct {
+            cap: u8 = QUEUE_CAPACITY_INIT,
+        };
+        var parsed = std.json.parseFromSlice(
+            CmdQueueConfig,
+            self.allocator,
+            body,
+            .{ .ignore_unknown_fields = true },
+        ) catch |e| {
+            self.logError("parsed-body-failed", e);
+            return error.ParseWifiConfigFailed;
+        };
+        defer parsed.deinit();
+
+        self.queue_capacity = parsed.value.cap;
+        self.sendStructAsJson(req, null, "success");
     }
     return error.RequestBodyIsNotValid;
 }
@@ -485,18 +509,7 @@ fn postCommandEnqueue(self: *Self, req: [*c]mod.http.Req) !void {
                 },
             };
 
-        var msg_buf = body_buffer;
-        const template =
-            \\{{"total":{d},"available":{d}}}
-        ;
-        const msg = std.fmt.bufPrint(&msg_buf, template, .{
-            self.queue_capacity,
-            self.queue.spacesAvailable(),
-        }) catch |e| {
-            self.logError("msg buf too small", e);
-            return error.MsgBufTooSmall;
-        };
-        self.sendStructAsJson(req, msg, "enqueued!");
+        self.sendStructAsJson(req, null, "enqueued!");
     }
     return error.RequestBodyIsNotValid;
 }
@@ -576,7 +589,7 @@ fn getIp(self: *Self, req: [*c]mod.http.Req) !void {
 /// get /cmd/queue
 fn getCommandQueueStatus(self: *Self, req: [*c]mod.http.Req) !void {
     const total = self.queue_capacity;
-    const space = self.queue.spacesAvailable();
+    const space = total - (QUEUE_CAPACITY - self.queue.spacesAvailable());
 
     var buf: [48]u8 = undefined;
     const template =
