@@ -185,6 +185,7 @@ fn sendError(
 
     idf.http.Server.Response.sendStr(req, msg) catch |e| {
         log.err("error message: {s}, sendStr: {s}", .{ msg, @errorName(e) });
+        idf.http.Server.Response.sendError(req, 0, "") catch {};
     };
 }
 
@@ -282,27 +283,27 @@ fn readBody(
     return if (i > 0) buffer[0..i] else null;
 }
 
-fn readBodyAlloc(
-    self: *Self,
-    allocator: std.mem.Allocator,
-    req: [*c]mod.http.Req,
-) ?std.ArrayList(u8) {
-    var buf: [1024]u8 = undefined;
-    var array: std.ArrayList(u8) = .empty;
-    errdefer array.deinit(allocator);
+// fn readBodyAlloc(
+//     self: *Self,
+//     allocator: std.mem.Allocator,
+//     req: [*c]mod.http.Req,
+// ) ?std.ArrayList(u8) {
+//     var buf: [1024]u8 = undefined;
+//     var array: std.ArrayList(u8) = .empty;
+//     errdefer array.deinit(allocator);
 
-    while (true) {
-        const len = idf.http.Server.Request.receiver(req, &buf, buf.len);
-        if (len > 0) {
-            array.appendSlice(allocator, buf[0..@as(usize, @intCast(len))]) catch |e| {
-                self.sendError(req, "Read-body-failed", e);
-                defer array.deinit(allocator);
-                return null;
-            };
-        } else break;
-    }
-    return array;
-}
+//     while (true) {
+//         const len = idf.http.Server.Request.receiver(req, &buf, buf.len);
+//         if (len > 0) {
+//             array.appendSlice(allocator, buf[0..@as(usize, @intCast(len))]) catch |e| {
+//                 self.sendError(req, "Read-body-failed", e);
+//                 defer array.deinit(allocator);
+//                 return null;
+//             };
+//         } else break;
+//     }
+//     return array;
+// }
 
 pub fn startConsume(self: *Self) !void {
     _ = try mod.idf.rtos.Task.create(
@@ -462,12 +463,11 @@ fn postCommandEnqueue(self: *Self, req: [*c]mod.http.Req) !void {
     var body_buffer: [MAX_BODY_SIZE]u8 = undefined;
     if (try self.readBody(&body_buffer, req)) |body| {
         if (QUEUE_CAPACITY - self.queue.spacesAvailable() >= self.queue_capacity) {
-            self.sendJsonError(req, 500, "full");
             return error.Full;
         }
 
-        var buf = self.allocator.alloc(u8, body.len) catch {
-            self.sendJsonError(req, 500, "alloc-bytecode-size-buffer-failed");
+        var buf = self.allocator.alloc(u8, body.len) catch |e| {
+            self.logError("command-enqueue-oom", e);
             return error.AllocFail;
         };
         errdefer self.allocator.free(buf);
@@ -476,11 +476,11 @@ fn postCommandEnqueue(self: *Self, req: [*c]mod.http.Req) !void {
         self.queue.enqueue(.{ .allocator = self.allocator, .bytes = buf }) catch |err|
             switch (err) {
                 Queue.QueueError.Full => {
-                    self.sendJsonError(req, 500, "full");
+                    self.logError("command-enqueue-full", err);
                     return error.Full;
                 },
                 else => {
-                    self.sendJsonError(req, 500, "enqueue-error");
+                    self.logError("command-enqueue-enqueue-error", err);
                     return error.EnqueueError;
                 },
             };
