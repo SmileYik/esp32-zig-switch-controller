@@ -180,16 +180,18 @@ pub fn resetButton(self: *Controller) void {
 }
 
 pub fn sleep(self: *Controller, ms: u32) void {
-    const slice_ms = 20;
-    var remains = ms;
-    while (remains > slice_ms) {
-        self._handler.sleep(slice_ms);
-        remains -= slice_ms;
-        self.send(self.packet());
-    }
-    if (remains > 0) {
-        self._handler.sleep(remains);
-    }
+    self.send(.{ .sleep = ms });
+    self._handler.sleep(ms);
+    // const slice_ms = 25;
+    // var remains = ms;
+    // while (remains > slice_ms) {
+    //     self.send(.{ .sleep = slice_ms });
+    //     remains -= slice_ms;
+    //     self.send(self.packet());
+    // }
+    // if (remains > 0) {
+    //     self.send(.{ .sleep = remains });
+    // }
 }
 
 pub fn send(self: *Controller, report: ReportType) void {

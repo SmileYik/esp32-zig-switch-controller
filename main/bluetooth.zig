@@ -31,6 +31,7 @@ pub const HIDDType = enum(c_int) {
     open = sys.ESP_HIDD_OPEN_EVT,
     close = sys.ESP_HIDD_CLOSE_EVT,
     intr = sys.ESP_HIDD_INTR_DATA_EVT,
+    send_report = sys.ESP_HIDD_SEND_REPORT_EVT,
 };
 
 pub const HIDDEvent = union(HIDDType) {
@@ -39,6 +40,7 @@ pub const HIDDEvent = union(HIDDType) {
     open: ?*const sys.struct_hidd_open_evt_param_187,
     close: ?*const sys.struct_hidd_close_evt_param_188,
     intr: ?*const sys.struct_hidd_intr_data_evt_param_194,
+    send_report: ?*const sys.struct_hidd_send_report_evt_param_189,
 };
 
 pub const HIDDCallback = *const fn (event: HIDDEvent) void;
@@ -267,25 +269,15 @@ pub fn sendReport(self: *Self, data: []u8) !void {
 
     const report_id = data[self.send_report_offset];
     const payload = data[self.send_report_offset + 1 ..];
-
-    for (0..3) |i| {
-        const delay_ms = std.math.pow(usize, 2, i) - 1;
-        if (delay_ms > 0) {
-            mod.idf.rtos.Task.delayMs(delay_ms);
-        }
-        errors.espCheckError(sys.esp_bt_hid_device_send_report(
-            sys.ESP_HIDD_REPORT_TYPE_INTRDATA,
-            report_id,
-            @intCast(payload.len),
-            payload.ptr,
-        )) catch |e| {
-            log.err("send report failed: {s}", .{@errorName(e)});
-            continue;
-        };
-        return;
-    }
-
-    return BTError.SendReportFailed;
+    errors.espCheckError(sys.esp_bt_hid_device_send_report(
+        sys.ESP_HIDD_REPORT_TYPE_INTRDATA,
+        report_id,
+        @intCast(payload.len),
+        payload.ptr,
+    )) catch |e| {
+        log.err("send report failed: {s}", .{@errorName(e)});
+        return BTError.SendReportFailed;
+    };
 }
 
 fn classicInit(mac: [6]u8) !void {
@@ -365,6 +357,10 @@ export fn hiddCallback(
                         );
                     }
                 }
+            },
+
+            sys.ESP_HIDD_SEND_REPORT_EVT => {
+                ins.callHIDDHandler(.{ .send_report = if (param == null) null else &param.*.send_report });
             },
 
             else => {},

@@ -1,5 +1,6 @@
 const std = @import("std");
 const mod = @import("root.zig");
+const sys = mod.sys;
 const Allocator = std.mem.Allocator;
 const Protocol = mod.protocol.Protocol;
 
@@ -9,6 +10,8 @@ const ReportType = mod.report.ReportType;
 const testing = std.testing;
 const ExpectEqual = testing.expectEqual;
 const log = std.log.scoped(.report_queue);
+
+const SEND_REPORT_BIT = @as(c_int, 0x1);
 
 pub fn ReportQueue(comptime size: usize) type {
     return struct {
@@ -30,12 +33,19 @@ pub fn ReportQueue(comptime size: usize) type {
         is_connected: std.atomic.Value(bool) = .init(false),
         snapshot_input: ReportType = .{ .input = .{} },
 
+        send_mutex: mod.Mutex,
+        send_event_group: sys.EventGroupHandle_t = null,
+        send_event_status: c_uint = 0,
+
         pub fn init(allocator: Allocator, opt: Options, bt_opt: mod.bt.Options) !*Self {
             const p: *Self = try allocator.create(Self);
             errdefer allocator.destroy(p);
 
             var mutex: mod.Mutex = try .init();
             errdefer mutex.deinit();
+
+            var send_mutex: mod.Mutex = try .init();
+            errdefer send_mutex.deinit();
 
             var queue = opt.queue orelse try Queue.init(.{
                 .allocator = allocator,
@@ -44,12 +54,17 @@ pub fn ReportQueue(comptime size: usize) type {
             });
             errdefer if (opt.queue == null) queue.deinit();
 
+            const send_event_group = sys.xEventGroupCreate() orelse return error.EventGroupCreateFailed;
+            errdefer send_event_group.vEventGroupDelete();
+
             p.* = .{
                 .allocator = allocator,
                 .bt = undefined,
                 .protocol = opt.protocol,
                 .queue = queue,
                 .task_mutex = mutex,
+                .send_mutex = send_mutex,
+                .send_event_group = send_event_group,
             };
 
             var bt = try mod.bt.init(allocator, p, bt_opt);
@@ -69,6 +84,7 @@ pub fn ReportQueue(comptime size: usize) type {
             self.task_mutex.lockUncancelable();
             self.task_mutex.unlock();
             self.task_mutex.deinit();
+            self.send_mutex.deinit();
             self.bt.deinit();
 
             self.queue.deinit();
@@ -92,6 +108,10 @@ pub fn ReportQueue(comptime size: usize) type {
 
         pub inline fn enqueueWait(self: *Self, item: ReportType, ticks: u32) !void {
             try self.queue.enqueueWait(item, ticks);
+        }
+
+        pub inline fn spacesAvailable(self: *Self) usize {
+            return self.queue.spacesAvailable();
         }
 
         fn dupeReportTag(allocator: Allocator, old: ReportType) !ReportType {
@@ -124,6 +144,59 @@ pub fn ReportQueue(comptime size: usize) type {
             };
         }
 
+        fn sendReportInner(self: *Self, data: []u8) !void {
+            self.send_mutex.lockUncancelable();
+            defer self.send_mutex.unlock();
+
+            while (true) {
+                _ = sys.xEventGroupClearBits(
+                    self.send_event_group,
+                    SEND_REPORT_BIT,
+                );
+                self.bt.sendReport(data) catch |err| {
+                    log.err(
+                        "[SEND_REPORT] API send failed: {s}",
+                        .{@errorName(err)},
+                    );
+                    return err;
+                };
+
+                _ = sys.xEventGroupWaitBits(
+                    self.send_event_group,
+                    SEND_REPORT_BIT,
+                    1,
+                    0,
+                    sys.portMAX_DELAY,
+                );
+
+                const status = self.send_event_status;
+                switch (status) {
+                    sys.ESP_HIDD_SUCCESS => {
+                        self.protocol.nextTimer();
+                        return;
+                    },
+
+                    sys.ESP_HIDD_BUSY, sys.ESP_HIDD_NO_RES => {
+                        mod.idf.rtos.Task.delayMs(2);
+                        log.warn(
+                            "[SEND_REPORT] recoverable status={d}, retrying",
+                            .{status},
+                        );
+                        continue;
+                    },
+
+                    else => {
+                        log.err(
+                            "[SEND_REPORT] unrecoverable status={d}",
+                            .{status},
+                        );
+
+                        return error.SendReportFailed;
+                    },
+                }
+            }
+        }
+
         export fn reportTask(ctx: ?*anyopaque) callconv(.c) void {
             var self: *Self = @ptrCast(@alignCast(ctx.?));
             self.task_mutex.lockUncancelable();
@@ -147,17 +220,17 @@ pub fn ReportQueue(comptime size: usize) type {
                             switch (self.protocol.response) {
                                 .no_data, .malformed, .too_short => {
                                     if (s == null) {
-                                        self.bt.sendReport(self.protocol.report[0..]) catch {};
+                                        self.sendReportInner(self.protocol.report[0..]) catch {};
                                     }
                                 },
                                 else => {
-                                    self.bt.sendReport(self.protocol.report[0..]) catch {};
+                                    self.sendReportInner(self.protocol.report[0..]) catch {};
                                 },
                             }
                         },
 
                         .sending => |s| {
-                            self.bt.sendReport(s) catch {};
+                            self.sendReportInner(s) catch {};
                         },
 
                         .input => |s| {
@@ -167,7 +240,11 @@ pub fn ReportQueue(comptime size: usize) type {
                             self.protocol.setRightStickInputs(s.right_stick_centre);
                             self.snapshot_input = .{ .input = s };
                             defer self.protocol.clearReport();
-                            self.bt.sendReport(self.protocol.report[0..]) catch {};
+                            self.sendReportInner(self.protocol.report[0..]) catch {};
+                        },
+
+                        .sleep => |ms| {
+                            mod.idf.rtos.Task.delayMs(ms);
                         },
 
                         .stop => return,
@@ -182,7 +259,7 @@ pub fn ReportQueue(comptime size: usize) type {
                 .open => {
                     self.is_connected.store(true, .release);
                     self.enqueue(.{ .incoming = null }) catch |e| {
-                        log.err("error when enqueue: {}", .{e});
+                        log.err("[HIDD] [open] error when enqueue: {}", .{e});
                     };
                 },
                 .close => {
@@ -194,9 +271,15 @@ pub fn ReportQueue(comptime size: usize) type {
                             const rx_slice = intr.data[0..intr.len];
 
                             self.enqueue(.{ .incoming = rx_slice }) catch |e| {
-                                log.err("error when enqueue: {}", .{e});
+                                log.err("[HIDD] [intr] error when enqueue: {}", .{e});
                             };
                         }
+                    }
+                },
+                .send_report => |send_report_opt| {
+                    if (send_report_opt) |s| {
+                        self.send_event_status = s.status;
+                        _ = sys.xEventGroupSetBits(self.send_event_group, SEND_REPORT_BIT);
                     }
                 },
                 else => {},

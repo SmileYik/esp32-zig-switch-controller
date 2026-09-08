@@ -15,8 +15,6 @@ pub const report_queue = @import("report_queue.zig");
 
 pub const ReportQueue = report_queue.ReportQueue(64);
 
-pub const TomodachiLifeDrawer = @import("tomodachi_life_drawer.zig");
-
 const std = @import("std");
 pub const Configuration = struct {
     pub const Keys = enum {

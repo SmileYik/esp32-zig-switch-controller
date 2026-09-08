@@ -2,6 +2,7 @@ pub const ReportTag = enum {
     incoming,
     sending,
     input,
+    sleep,
     stop,
 };
 
@@ -15,5 +16,6 @@ pub const ReportType = union(ReportTag) {
         left_stick_centre: [3]u8 = [_]u8{ 0, 0, 0 },
         right_stick_centre: [3]u8 = [_]u8{ 0, 0, 0 },
     },
+    sleep: usize,
     stop,
 };

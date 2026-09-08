@@ -29,8 +29,7 @@ mode: ?Constants.InputReportMode = null,
 player_number: ?u8 = null,
 device_info_queried: bool = false,
 
-timer: u8 = 0,
-last_timestamp_us: i64 = 0,
+timer: std.atomic.Value(u8) = .init(0),
 
 battery_level: u8 = 0x90,
 connection_info: u8,
@@ -155,20 +154,12 @@ pub fn setUnknownSubcommand(self: *Protocol, subcommand_id: u8) void {
     self.report[15] = subcommand_id;
 }
 
+pub fn nextTimer(self: *Protocol) void {
+    _ = self.timer.fetchAdd(1, .release);
+}
+
 pub fn setTimer(self: *Protocol) void {
-    const now_us = sys.esp_timer_get_time();
-    if (self.last_timestamp_us == 0) {
-        self.last_timestamp_us = now_us;
-        self.report[2] = 0x00;
-        return;
-    }
-
-    const delta_ms = @as(f64, @floatFromInt(now_us - self.last_timestamp_us)) / 1000.0;
-    const elapsed_ticks: u32 = @intFromFloat(delta_ms * 4.0);
-
-    self.timer = @truncate(@as(u32, self.timer) + elapsed_ticks);
-    self.report[2] = self.timer;
-    self.last_timestamp_us = now_us;
+    self.report[2] = self.timer.load(.acquire);
 }
 
 pub fn setFullInputReport(self: *Protocol) void {
