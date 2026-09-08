@@ -370,17 +370,26 @@ export const createZigMacroScriptContext = (
     moveTo: (targetX, targetY) => {
       const dx = targetX - context.curX;
       const dy = targetY - context.curY;
-
-      if (dx > 0) {
-        context.tapMultiple('DPAD_RIGHT', dx, context.tap);
-      } else if (dx < 0) {
-        context.tapMultiple('DPAD_LEFT', -dx, context.tap);
+      let xDirection = 'DPAD_RIGHT';
+      let xStep = dx;
+      let yDirection = 'DPAD_DOWN';
+      let yStep = dy;
+      if (dx < 0) {
+        xDirection = 'DPAD_LEFT';
+        xStep = -xStep;
+      }
+      if (dy < 0) {
+        yDirection = 'DPAD_UP';
+        yStep = -yStep;
       }
 
-      if (dy > 0) {
-        context.tapMultiple('DPAD_DOWN', dy, context.tap);
-      } else if (dy < 0) {
-        context.tapMultiple('DPAD_UP', -dy, context.tap);
+      const maxStep = Math.max(xStep, yStep);
+      context.tapMultiple(`${xDirection} ${yDirection}`, maxStep, context.tap);
+      if (xStep > maxStep) {
+        context.tapMultiple(`${xDirection}`, xStep - maxStep, context.tap);
+      }
+      if (yStep > maxStep) {
+        context.tapMultiple(`${yDirection}`, yStep - maxStep, context.tap);
       }
 
       context.curX = targetX;
