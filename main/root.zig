@@ -13,7 +13,7 @@ pub const Mutex = @import("mutex");
 pub const report = @import("report");
 pub const report_queue = @import("report_queue.zig");
 
-pub const ReportQueue = report_queue.ReportQueue(16);
+pub const ReportQueue = report_queue.ReportQueue(64);
 
 pub const TomodachiLifeDrawer = @import("tomodachi_life_drawer.zig");
 

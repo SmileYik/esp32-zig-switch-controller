@@ -267,15 +267,25 @@ pub fn sendReport(self: *Self, data: []u8) !void {
 
     const report_id = data[self.send_report_offset];
     const payload = data[self.send_report_offset + 1 ..];
-    errors.espCheckError(sys.esp_bt_hid_device_send_report(
-        sys.ESP_HIDD_REPORT_TYPE_INTRDATA,
-        report_id,
-        @intCast(payload.len),
-        payload.ptr,
-    )) catch |e| {
-        log.err("send report failed: {s}", .{@errorName(e)});
-        return BTError.SendReportFailed;
-    };
+
+    for (0..3) |i| {
+        const delay_ms = std.math.pow(usize, 2, i) - 1;
+        if (delay_ms > 0) {
+            mod.idf.rtos.Task.delayMs(delay_ms);
+        }
+        errors.espCheckError(sys.esp_bt_hid_device_send_report(
+            sys.ESP_HIDD_REPORT_TYPE_INTRDATA,
+            report_id,
+            @intCast(payload.len),
+            payload.ptr,
+        )) catch |e| {
+            log.err("send report failed: {s}", .{@errorName(e)});
+            continue;
+        };
+        return;
+    }
+
+    return BTError.SendReportFailed;
 }
 
 fn classicInit(mac: [6]u8) !void {

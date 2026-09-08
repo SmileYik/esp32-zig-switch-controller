@@ -245,9 +245,9 @@ pub fn CommandRunner(comptime CallStack: type) type {
                 .reset_button => self.controller.resetButton(),
                 .reset_stick => |stick| self.controller.resetStick(stick),
                 .stick => |stick| self.controller.setStick(stick.stick, stick.x, stick.y),
-                .wait => |ms| self.controller.handler.sleep(ms),
-                .wait_u16 => |ms| self.controller.handler.sleep(@intCast(ms)),
-                .wait_u8 => |ms| self.controller.handler.sleep(@intCast(ms)),
+                .wait => |ms| self.controller.sleep(ms),
+                .wait_u16 => |ms| self.controller.sleep(@intCast(ms)),
+                .wait_u8 => |ms| self.controller.sleep(@intCast(ms)),
                 .commands => |*cs| self.runCommands(cs),
                 .repeat => |*repeat| {
                     for (0..repeat.times) |_| {
@@ -306,15 +306,15 @@ pub fn CommandRunner(comptime CallStack: type) type {
                 switch (tag) {
                     .wait => {
                         const ms = try reader.readInt(u32);
-                        self.controller.handler.sleep(ms);
+                        self.controller.sleep(ms);
                     },
                     .wait_u16 => {
                         const ms = try reader.readInt(u16);
-                        self.controller.handler.sleep(@intCast(ms));
+                        self.controller.sleep(@intCast(ms));
                     },
                     .wait_u8 => {
                         const ms = try reader.readByte();
-                        self.controller.handler.sleep(@intCast(ms));
+                        self.controller.sleep(@intCast(ms));
                     },
 
                     .down => {

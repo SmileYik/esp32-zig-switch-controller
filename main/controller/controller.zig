@@ -44,7 +44,7 @@ right_stick_calibration: StickCalibration,
 
 mutex: Mutex,
 allocator: std.mem.Allocator,
-handler: mod.ControllerHandler,
+_handler: mod.ControllerHandler,
 running: std.atomic.Value(bool) = .init(false),
 heartbeat: bool = true,
 
@@ -58,7 +58,7 @@ pub fn init(allocator: std.mem.Allocator, handler: anytype, opt: Options) !*Cont
     ptr.* = .{
         .mutex = mutex,
         .allocator = allocator,
-        .handler = mod.ControllerHandler.init(handler),
+        ._handler = mod.ControllerHandler.init(handler),
         .left_stick_calibration = opt.left_stick_calibration,
         .right_stick_calibration = opt.right_stick_calibration,
     };
@@ -131,9 +131,7 @@ pub fn pressButton(self: *Controller, button: mod.Button, state: mod.ButtonState
     );
 
     if (!combine)
-        self.handler.send(self.packetUnlocked()) catch |err| {
-            log.err("failed to send press button report: {s}", .{@errorName(err)});
-        };
+        self.send(self.packetUnlocked());
 }
 
 pub fn setStick(self: *Controller, stick: mod.StickType, x: i8, y: i8) void {
@@ -154,9 +152,7 @@ pub fn setStickUnlocked(self: *Controller, stick: mod.StickType, x: i8, y: i8) v
         .right_stick => self.right_stick_centre = calibratedPosition(x, y, self.right_stick_calibration),
     }
 
-    self.handler.send(self.packetUnlocked()) catch |err| {
-        log.err("failed to send stick report: {s}", .{@errorName(err)});
-    };
+    self.send(self.packetUnlocked());
 }
 
 pub fn resetStick(self: *Controller, stick: mod.StickType) void {
@@ -169,9 +165,7 @@ pub fn resetStick(self: *Controller, stick: mod.StickType) void {
 pub fn resetStickUnlocked(self: *Controller, stick: mod.StickType) void {
     self.setStickUnlocked(stick, 0, 0);
 
-    self.handler.send(self.packetUnlocked()) catch |err| {
-        log.err("failed to reset stick report: {s}", .{@errorName(err)});
-    };
+    self.send(self.packetUnlocked());
 }
 
 pub fn resetButton(self: *Controller) void {
@@ -182,8 +176,25 @@ pub fn resetButton(self: *Controller) void {
     self.button_shared = 0;
     self.button_upper = 0;
 
-    self.handler.send(self.packetUnlocked()) catch |err| {
-        log.err("failed to send reset button report: {s}", .{@errorName(err)});
+    self.send(self.packetUnlocked());
+}
+
+pub fn sleep(self: *Controller, ms: u32) void {
+    const slice_ms = 20;
+    var remains = ms;
+    while (remains > slice_ms) {
+        self._handler.sleep(slice_ms);
+        remains -= slice_ms;
+        self.send(self.packet());
+    }
+    if (remains > 0) {
+        self._handler.sleep(remains);
+    }
+}
+
+pub fn send(self: *Controller, report: ReportType) void {
+    self._handler.send(report) catch |err| {
+        log.err("failed to send packet: {s}", .{@errorName(err)});
     };
 }
 
@@ -193,12 +204,12 @@ pub fn setHeartbeat(self: *Controller, flag: bool) void {
 
 pub fn heartbeatLoop(self: *Controller, comptime every_ms: u16) void {
     while (true) {
-        if (self.heartbeat and !self.handler.send_report_flag) {
+        if (self.heartbeat and !self._handler.send_report_flag) {
             log.debug("send heartbeat", .{});
-            self.handler.send(.{ .incoming = null }) catch {};
+            self._handler.send(.{ .incoming = null }) catch {};
         }
-        self.handler.resetSendFlag();
-        self.handler.sleep(every_ms);
+        self._handler.resetSendFlag();
+        self._handler.sleep(every_ms);
     }
 }
 

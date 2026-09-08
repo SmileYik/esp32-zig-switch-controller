@@ -24,7 +24,7 @@ const ReportSender = struct {
     report_queue: *mod.ReportQueue,
 
     pub fn send(self: *ReportSender, report: mod.report.ReportType) !void {
-        try self.report_queue.enqueue(report);
+        try self.report_queue.enqueueWait(report, idf.rtos.msToTicks(3000));
     }
 
     pub fn sleep(_: *ReportSender, ms: u32) void {

@@ -82,7 +82,7 @@ pub fn ReportQueue(comptime size: usize) type {
                 "report_task",
                 1024 * 8,
                 self,
-                1,
+                10,
             );
         }
 

@@ -9,7 +9,7 @@ const CommandRunner = runner.CommandRunner(runner.CallStackStatic(8));
 
 const MAX_BODY_SIZE = 4096;
 pub const QUEUE_CAPACITY = 255;
-pub const QUEUE_CAPACITY_INIT = 24;
+pub const QUEUE_CAPACITY_INIT = 16;
 const Queue = mod.Queue(ByteCode, QUEUE_CAPACITY);
 
 const log = std.log.scoped(.http_action);
@@ -87,7 +87,7 @@ pub fn getUris(self: *Self) []const mod.http.Uri {
 }
 
 pub fn logMemory(self: *Self) void {
-    log.info("--- memory: {d}/{d}", .{ self.heap.freeSize(), self.heap.totalSize() });
+    log.debug("--- memory: {d}/{d}", .{ self.heap.freeSize(), self.heap.totalSize() });
 }
 
 /// GET / — serve the index page.
@@ -315,8 +315,8 @@ fn readBody(
 pub fn startConsume(self: *Self) !void {
     _ = try mod.idf.rtos.Task.create(
         consumeByteCode,
-        "consume_bytecode",
-        1024 * 4,
+        "ConsumeBytecode",
+        1024 * 8,
         self,
         5,
     );
@@ -363,6 +363,21 @@ export fn consumeByteCode(ctx: ?*anyopaque) callconv(.c) void {
             }
         }
     }
+}
+
+pub fn crc16Modbus(data: []const u8) u16 {
+    var crc: u16 = 0xFFFF;
+    for (data) |b| {
+        crc ^= @as(u16, b);
+        for (0..8) |_| {
+            if ((crc & 0x1) != 0) {
+                crc = (crc >> 1) ^ 0xA001;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    return crc;
 }
 
 // =======================================
@@ -526,6 +541,10 @@ fn postCommandQueueInit(self: *Self, req: [*c]mod.http.Req) !void {
 
 /// POST /cmd/queue?idx={idx}
 fn postCommandEnqueue(self: *Self, req: [*c]mod.http.Req) !void {
+    if (self.queue_init.load(.acquire)) {
+        return error.QueueIniting;
+    }
+
     var query: [64:0]u8 = undefined;
     var idx_c: [16:0]u8 = undefined;
     @memset(&query, 0);
@@ -533,11 +552,6 @@ fn postCommandEnqueue(self: *Self, req: [*c]mod.http.Req) !void {
 
     try idf.http.Server.Request.getUrlQueryStr(req, &query, query.len);
     try idf.http.Server.queryKeyValue(&query, "idx", &idx_c, idx_c.len);
-
-    if (self.queue_init.load(.acquire)) {
-        return error.QueueIniting;
-    }
-
     const idx = try std.fmt.parseInt(u32, std.mem.sliceTo(&idx_c, 0), 10);
     if (self.queue_expect_idx.load(.acquire) != idx) {
         @memset(&idx_c, 0);
@@ -547,9 +561,19 @@ fn postCommandEnqueue(self: *Self, req: [*c]mod.http.Req) !void {
     }
 
     var body_buffer: [MAX_BODY_SIZE]u8 = undefined;
-    if (try self.readBody(&body_buffer, req)) |body| {
-        if (QUEUE_CAPACITY - self.queue.spacesAvailable() >= self.queue_capacity) {
-            return error.Full;
+    if (try self.readBody(&body_buffer, req)) |body_raw| {
+        if (body_raw.len < 2) {
+            return error.PayloadTooShort;
+        } else if (QUEUE_CAPACITY - self.queue.spacesAvailable() >= self.queue_capacity) {
+            return error.QueueFull;
+        }
+
+        // crc
+        const body = body_raw[0 .. body_raw.len - 2];
+        const expected_crc = std.mem.readInt(u16, body_raw[body_raw.len - 2 ..][0..2], .little);
+        const real_crc = crc16Modbus(body);
+        if (expected_crc != real_crc) {
+            return error.CrcMismatch;
         }
 
         var buf = self.allocator.alloc(u8, body.len) catch |e| {
@@ -563,7 +587,7 @@ fn postCommandEnqueue(self: *Self, req: [*c]mod.http.Req) !void {
             switch (err) {
                 Queue.QueueError.Full => {
                     self.logError("command-enqueue-full", err);
-                    return error.Full;
+                    return error.QueueFull;
                 },
                 else => {
                     self.logError("command-enqueue-enqueue-error", err);
