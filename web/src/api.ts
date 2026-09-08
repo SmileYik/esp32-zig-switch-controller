@@ -177,10 +177,44 @@ export class Esp32Client {
 
   /** 将字节码入队（异步执行） */
   async enqueueCommand(idx: number, bytecode: Uint8Array): Promise<number> {
+//     pub fn crc16Modbus(data: []const u8) u16 {
+//     var crc: u16 = 0xFFFF;
+//     for (data) |b| {
+//         crc ^= @as(u16, b);
+//         for (0..8) |_| {
+//             if ((crc & 0x1) != 0) {
+//                 crc = (crc >> 1) ^ 0xA001;
+//             } else {
+//                 crc >>= 1;
+//             }
+//         }
+//     }
+//     return crc;
+// }
+    const crc16Modbus = (data: Uint8Array) => {
+      let crc = 0xFFFF;
+      data.forEach(b => {
+        crc ^= b;
+        for (let i = 0; i < 8; ++i) {
+          if ((crc & 0x1) != 0) {
+            crc = (crc >> 1) ^ 0xA001;
+          } else {
+            crc >>= 1;
+          }
+        }
+      });
+      return crc & 0xFFFF;
+    };
+    const crc = crc16Modbus(bytecode);
+    const newBytecode = new Uint8Array(bytecode.length + 2);
+    newBytecode.set(bytecode, 0);
+    newBytecode[bytecode.length] = crc & 0xff;
+    newBytecode[bytecode.length + 1] = (crc >> 8) & 0xff;
+
     const result = await this.request<number>(`/cmd/queue&idx=${idx}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/octet-stream' },
-      body: bytecode.buffer as ArrayBuffer,
+      body: newBytecode.buffer as ArrayBuffer,
     });
     return result.data;
   }

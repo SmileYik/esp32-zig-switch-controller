@@ -19,6 +19,7 @@ function TomodachiLifeNormal({
   const [cropHeight, setCropHeight] = useState<number>(256);
   const [downDelayMs, setDownDelayMs] = useState<number>(100);
   const [upDelayMs, setUpDelayMs] = useState<number>(100);
+  const [uiDelayMs, setUiDelayMs] = useState<number>(100);
 
   const [originalImage, setOriginalImage] = useState<HTMLImageElement | null>(null);
   const [croppedImage, setCroppedImage] = useState<HTMLImageElement | null>(null);
@@ -308,12 +309,13 @@ function TomodachiLifeNormal({
       pIndices: pixelIndices,
       downDelay: downDelayMs,
       upDelay: upDelayMs,
+      uiDelay: uiDelayMs,
     });
     if (compressScript) {
       return "# 已压缩\n" + compressMacro(script.split("\n")).join("\n");
     }
     return script;
-  }, [cropWidth, cropHeight, downDelayMs, upDelayMs, currentPalette, pixelIndices, macroAlgorithm, compressScript]);
+  }, [cropWidth, cropHeight, downDelayMs, upDelayMs, uiDelayMs, currentPalette, pixelIndices, macroAlgorithm, compressScript]);
 
   const VIEWPORT_WIDTH = Math.max(360, cropWidth + 80);
   const VIEWPORT_HEIGHT = Math.max(360, cropHeight + 80);
@@ -626,6 +628,19 @@ function TomodachiLifeNormal({
                         max="1000"
                         value={upDelayMs}
                         onChange={(e) => setUpDelayMs(parseInt(e.target.value) || 100)}
+                        className="m3-input"
+                        style={{ width: '100px' }}
+                      />
+                    </label>
+
+                    <label className="m3-input-field">
+                      界面延迟:
+                      <input
+                        type="number"
+                        min="10"
+                        max="1000"
+                        value={uiDelayMs}
+                        onChange={(e) => setUiDelayMs(parseInt(e.target.value) || 100)}
                         className="m3-input"
                         style={{ width: '100px' }}
                       />

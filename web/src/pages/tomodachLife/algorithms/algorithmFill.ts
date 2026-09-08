@@ -15,7 +15,6 @@ export const generateZigMacroScriptFill = (
   type CoverCandidate = {
     name: string;
     selected: Uint8Array;
-    usesTemporaryTransparent: boolean;
   };
 
   type FlowEdge = {
@@ -24,45 +23,9 @@ export const generateZigMacroScriptFill = (
     cap: number;
   };
 
-  const context = createZigMacroScriptContext(options);
-
-  const {
-    w,
-    h,
-    palette,
-    pIndices,
-    upDelay,
-    downDelay,
-    beginDraw,
-    endDraw,
-    beginEarse,
-    endEarse,
-    chooseTool,
-    chooseColorPanel,
-    chooseHSVColor,
-    initToolPanel,
-    initColorPanel,
-    moveTo,
-    directionFromTo,
-    getId,
-  } = context;
-
+  const { w, h, palette, pIndices, upDelay, downDelay } = options;
   const totalCells = w * h;
-  const cellId = getId;
-
-  context.comments([
-    '==========================================',
-    'Tomodachi Life 自动化绘制宏脚本',
-    'Fill Boundary-Cut 优化策略：',
-    '1. 允许临时覆盖，先建立尽可能少的隔离墙',
-    '2. 用加权最小顶点覆盖切断不同目标颜色之间的相邻边',
-    '3. 隔离后的单色空白连通块直接使用 fill',
-    '4. 透明像素可使用临时颜色作墙，全部 fill 完成后统一 erase',
-    '5. 最终额外与 Segment / DFS 基线比较，选择预计耗时更短的方案',
-    `尺寸: ${w}x${h} | 颜色数: ${palette.length} | 延迟: 延迟: ${upDelay}ms/${downDelay}ms`,
-    '==========================================',
-    ''
-  ]);
+  const cellId = (x: number, y: number): number => y * w + x;
 
   const colorAt = (id: number): number => {
     const x = id % w;
@@ -91,7 +54,7 @@ export const generateZigMacroScriptFill = (
     graph[to].push(backward);
   };
 
-  const minCutCover = (temporaryTransparentCost: number): Uint8Array => {
+  const minCutCover = (transparentVertexCost: number): Uint8Array => {
     const source = totalCells;
     const sink = totalCells + 1;
     const graph: FlowEdge[][] = Array.from(
@@ -100,14 +63,14 @@ export const generateZigMacroScriptFill = (
     );
 
     const totalWeightUpperBound =
-      totalCells * Math.max(temporaryTransparentCost, 1);
+      totalCells * Math.max(transparentVertexCost, 1);
     const INF = Math.max(1_000_000_000, totalWeightUpperBound + 1);
 
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const id = cellId(x, y);
         const color = colorAt(id);
-        const weight = color === 0 ? temporaryTransparentCost : 1;
+        const weight = color === 0 ? transparentVertexCost : 1;
 
         if (((x + y) & 1) === 0) {
           addEdge(graph, source, id, weight);
@@ -563,6 +526,7 @@ export const generateZigMacroScriptFill = (
   };
 
   const replayPaths = (
+    context: ReturnType<typeof createZigMacroScriptContext>,
     paths: StrokePath[],
     mode: 'draw' | 'erase'
   ) => {
@@ -612,12 +576,12 @@ export const generateZigMacroScriptFill = (
       const original = paths[bestIndex];
       const path = bestReverse ? original.slice().reverse() : original;
       const firstId = path[0];
-      moveTo(firstId % w, Math.floor(firstId / w));
+      context.moveTo(firstId % w, Math.floor(firstId / w));
 
       if (mode === 'draw') {
-        beginDraw();
+        context.beginDraw();
       } else {
-        beginEarse();
+        context.beginEarse();
       }
 
       for (let i = 1; i < path.length; i++) {
@@ -631,37 +595,47 @@ export const generateZigMacroScriptFill = (
           x: toId % w,
           y: Math.floor(toId / w),
         };
-        const direction = directionFromTo(from, to);
+        const direction = context.directionFromTo(from, to);
         context.goto(direction, 1);
         context.curX = to.x;
         context.curY = to.y;
       }
 
       if (mode === 'draw') {
-        endDraw();
+        context.endDraw();
       } else {
-        endEarse();
+        context.endEarse();
       }
     }
   };
 
-  const paintIdsWithCurrentColor = (ids: number[]) => {
+  const paintIdsWithCurrentColor = (
+    context: ReturnType<typeof createZigMacroScriptContext>,
+    ids: number[]
+  ) => {
     if (ids.length === 0) {
       return;
     }
 
-    chooseTool('pen');
+    context.chooseTool('pen');
     const paths = buildStrokePaths(ids, context.curX, context.curY);
-    replayPaths(paths, 'draw');
+    replayPaths(context, paths, 'draw');
   };
 
-  const renderCandidate = (candidate: CoverCandidate): string => {
-    const blankComponents = buildBlankComponents(candidate.selected);
+  type CandidatePlan = {
+    fillComponentsByColor: Map<number, BlankComponent[]>;
+    penComponentsByColor: Map<number, BlankComponent[]>;
+    coverByColor: Map<number, number[]>;
+    neededColors: number[];
+    allCoverIds: number[];
+  };
 
+  const analyzeCandidate = (candidate: CoverCandidate): CandidatePlan => {
+    const blankComponents = buildBlankComponents(candidate.selected);
     const fillComponentsByColor = new Map<number, BlankComponent[]>();
     const penComponentsByColor = new Map<number, BlankComponent[]>();
     const coverByColor = new Map<number, number[]>();
-    const tempTransparentIds: number[] = [];
+    const allCoverIds: number[] = [];
 
     for (let id = 0; id < totalCells; id++) {
       if (!candidate.selected[id]) {
@@ -670,10 +644,12 @@ export const generateZigMacroScriptFill = (
 
       const color = colorAt(id);
       if (color === 0) {
-        tempTransparentIds.push(id);
-        continue;
+        // A transparent selected vertex would require a temporary wall color.
+        // This implementation intentionally avoids that unsafe construction.
+        throw new Error(`Unsafe cover selected transparent pixel at ${id}`);
       }
 
+      allCoverIds.push(id);
       const list = coverByColor.get(color);
       if (list) {
         list.push(id);
@@ -705,146 +681,243 @@ export const generateZigMacroScriptFill = (
       }
     }
 
-    const neededColors = new Set<number>();
-    for (const color of coverByColor.keys()) neededColors.add(color);
-    for (const color of penComponentsByColor.keys()) neededColors.add(color);
-    for (const color of fillComponentsByColor.keys()) neededColors.add(color);
+    const neededColorsSet = new Set<number>();
+    for (const color of coverByColor.keys()) neededColorsSet.add(color);
+    for (const color of penComponentsByColor.keys()) neededColorsSet.add(color);
+    for (const color of fillComponentsByColor.keys()) neededColorsSet.add(color);
+
+    return {
+      fillComponentsByColor,
+      penComponentsByColor,
+      coverByColor,
+      neededColors: Array.from(neededColorsSet).sort((a, b) => a - b),
+      allCoverIds,
+    };
+  };
+
+  const renderCandidate = (
+    candidate: CoverCandidate,
+    barrierColor?: number
+  ): string => {
+    const context = createZigMacroScriptContext(options);
+    const plan = analyzeCandidate(candidate);
+
+    context.comments([
+      '==========================================',
+      'Tomodachi Life 自动化绘制宏脚本',
+      'Fill Boundary-Cut 优化策略：',
+      '1. 9 色以内直接使用真实目标颜色建立全部隔离墙',
+      '2. 超过 9 色时固定保留 1 个目标色作为临时墙颜色，另外 8 个槽用于当前批次',
+      '3. 最小顶点覆盖负责阻断不同目标颜色之间的透明连通区域',
+      '4. 所有未来批次的隔离墙只临时占位一次，轮到其目标颜色时再恢复并最终绘制',
+      '5. 每个候选独立生成并由宏编译器估算真实等待时间，最终选最快方案',
+      `尺寸: ${w}x${h} | 颜色数: ${palette.length} | 延迟: ${upDelay}ms/${downDelay}ms`,
+      '==========================================',
+      ''
+    ]);
+
+    const {
+      chooseTool,
+      chooseColorPanel,
+      chooseHSVColor,
+      initToolPanel,
+      initColorPanel,
+      moveTo,
+    } = context;
+
+    const paintIds = (ids: number[]) => {
+      paintIdsWithCurrentColor(context, ids);
+    };
+
+    const eraseIds = (ids: number[]) => {
+      if (ids.length === 0) {
+        return;
+      }
+      chooseTool('earse');
+      const paths = buildStrokePaths(ids, context.curX, context.curY);
+      replayPaths(context, paths, 'erase');
+    };
+
+    const fillColorComponents = (
+      slotByColor: Map<number, number>,
+      colors: number[],
+      reverse: boolean
+    ) => {
+      const ordered = reverse ? colors.slice().reverse() : colors.slice();
+
+      for (const color of ordered) {
+        const components = plan.fillComponentsByColor.get(color);
+        if (!components || components.length === 0) {
+          continue;
+        }
+
+        const slot = slotByColor.get(color);
+        if (slot === undefined) {
+          throw new Error(`Color ${color} has fill components but no active color slot`);
+        }
+
+        chooseColorPanel(slot);
+        chooseTool('fill');
+
+        const remaining = new Set<BlankComponent>(components);
+        while (remaining.size > 0) {
+          let bestComponent: BlankComponent | null = null;
+          let bestDistance = Infinity;
+          let bestPoint = -1;
+
+          for (const component of remaining) {
+            for (const id of component.pixels) {
+              const x = id % w;
+              const y = Math.floor(id / w);
+              const distance =
+                Math.abs(context.curX - x) + Math.abs(context.curY - y);
+
+              if (distance < bestDistance) {
+                bestDistance = distance;
+                bestComponent = component;
+                bestPoint = id;
+              }
+            }
+          }
+
+          if (!bestComponent || bestPoint < 0) {
+            throw new Error('Failed to find next fill component');
+          }
+
+          moveTo(bestPoint % w, Math.floor(bestPoint / w));
+          context.fill();
+          remaining.delete(bestComponent);
+        }
+      }
+    };
 
     initToolPanel();
     initColorPanel();
 
-    let tempPainted = false;
-    let batchStart = 1;
-
-    while (batchStart < palette.length + 1) {
-      const batchEnd = Math.min(
-        batchStart + 8,
-        palette.length
-      );
-
-      const batchColors: number[] = [];
-      for (let color = batchStart; color <= batchEnd; color++) {
-        if (neededColors.has(color)) {
-          batchColors.push(color);
-        }
+    // <= 9 colors: all cover pixels can be painted with their final colors before
+    // the first fill. Therefore no temporary barrier is required.
+    if (plan.neededColors.length <= 9 || barrierColor === undefined) {
+      if (plan.neededColors.length > 9) {
+        throw new Error('More than 9 colors require a barrier color');
       }
 
-      for (const color of batchColors) {
-        const slot = color - batchStart;
+      const colors = plan.neededColors;
+      const slotByColor = new Map<number, number>();
+
+      for (let slot = 0; slot < colors.length; slot++) {
+        const color = colors[slot];
+        slotByColor.set(color, slot);
         chooseHSVColor(slot, color);
       }
 
-      // 临时透明墙只需要配置一次。优先复用 batch 1 / slot 0 的颜色配置。
-      if (
-        !tempPainted &&
-        tempTransparentIds.length > 0 &&
-        batchStart === 1
-      ) {
-        if (palette.length === 0) {
-          throw new Error(
-            'Temporary transparent barriers require at least one palette color'
-          );
-        }
-
-        const slot0AlreadyConfigured = batchColors.includes(1);
-        if (!slot0AlreadyConfigured) {
-          chooseHSVColor(0, 1);
-        }
-        chooseColorPanel(0);
-        paintIdsWithCurrentColor(tempTransparentIds);
-        tempPainted = true;
-      }
-
-      // Keep all ordinary pen work together before entering fill tool.
-      for (const color of batchColors) {
-        const slot = color - batchStart;
+      // Critical correctness rule: every boundary-cover pixel of every color must
+      // already be painted before any fill happens.
+      for (let slot = 0; slot < colors.length; slot++) {
+        const color = colors[slot];
         chooseColorPanel(slot);
 
-        const ids: number[] = [];
-
-        const coverIds = coverByColor.get(color);
+        const coverIds = plan.coverByColor.get(color);
         if (coverIds) {
-          ids.push(...coverIds);
+          paintIds(coverIds);
         }
 
-        const penComponents = penComponentsByColor.get(color);
+        const penComponents = plan.penComponentsByColor.get(color);
         if (penComponents) {
           for (const component of penComponents) {
-            ids.push(...component.pixels);
+            paintIds(component.pixels);
           }
         }
-
-        if (ids.length > 0) {
-          paintIdsWithCurrentColor(ids);
-        }
       }
 
-      let hasFill = false;
-      for (const color of batchColors) {
-        const components = fillComponentsByColor.get(color);
-        if (components && components.length > 0) {
-          hasFill = true;
-          break;
-        }
+      fillColorComponents(slotByColor, colors, true);
+    } else {
+      if (!plan.neededColors.includes(barrierColor)) {
+        throw new Error(
+          `Barrier color ${barrierColor} is not used by this candidate`
+        );
       }
 
-      if (hasFill) {
-        chooseTool('fill');
+      // Reserve slot 8 for one future/temporary target color. The remaining eight
+      // slots can safely represent the active batch. The barrier color is loaded once
+      // and never overwritten until its real drawing phase at the very end.
+      const BARRIER_SLOT = 8;
+      chooseHSVColor(BARRIER_SLOT, barrierColor);
+      chooseColorPanel(BARRIER_SLOT);
 
-        for (const color of batchColors) {
-          const slot = color - batchStart;
+      // Paint every cover pixel once with the reserved barrier color. At this moment
+      // no fill is running, so every selected cell is a valid temporary wall.
+      paintIds(plan.allCoverIds);
+
+      const activeColors = plan.neededColors.filter(
+        color => color !== barrierColor
+      );
+
+      for (let offset = 0; offset < activeColors.length; offset += 8) {
+        const batch = activeColors.slice(offset, offset + 8);
+        const slotByColor = new Map<number, number>();
+
+        // Configure the current 8-color working set. Slot 8 remains the barrier color.
+        for (let slot = 0; slot < batch.length; slot++) {
+          const color = batch[slot];
+          slotByColor.set(color, slot);
+          chooseHSVColor(slot, color);
+        }
+
+        // Restore current-batch cover cells from temporary barrier color to their real
+        // target colors before allowing any fill. All future cover cells stay temporary.
+        const currentCoverIds: number[] = [];
+        for (const color of batch) {
+          const ids = plan.coverByColor.get(color);
+          if (ids) {
+            currentCoverIds.push(...ids);
+          }
+        }
+        eraseIds(currentCoverIds);
+
+        for (let slot = 0; slot < batch.length; slot++) {
+          const color = batch[slot];
           chooseColorPanel(slot);
 
-          const components = fillComponentsByColor.get(color);
-          if (!components) {
-            continue;
+          const coverIds = plan.coverByColor.get(color);
+          if (coverIds) {
+            paintIds(coverIds);
           }
 
-          const remaining = new Set<BlankComponent>(components);
-
-          while (remaining.size > 0) {
-            let bestComponent: BlankComponent | null = null;
-            let bestDistance = Infinity;
-            let bestPoint = -1;
-
-            for (const component of remaining) {
-              for (const id of component.pixels) {
-                const x = id % w;
-                const y = Math.floor(id / w);
-                const distance =
-                  Math.abs(context.curX - x) + Math.abs(context.curY - y);
-
-                if (distance < bestDistance) {
-                  bestDistance = distance;
-                  bestComponent = component;
-                  bestPoint = id;
-                }
-              }
+          const penComponents = plan.penComponentsByColor.get(color);
+          if (penComponents) {
+            for (const component of penComponents) {
+              paintIds(component.pixels);
             }
-
-            if (!bestComponent || bestPoint < 0) {
-              throw new Error('Failed to find next fill component');
-            }
-
-            moveTo(
-              bestPoint % w,
-              Math.floor(bestPoint / w)
-            );
-            context.fill();
-            remaining.delete(bestComponent);
           }
+        }
+
+        // All selected cover cells are now either already-final (past batches) or final
+        // in this batch; only future colors still use the barrier color.
+        fillColorComponents(slotByColor, batch, true);
+      }
+
+      // The reserved color's own cover cells are still temporary. Restore them, draw
+      // its small components, then fill it last so no temporary wall can be swallowed.
+      const barrierCoverIds = plan.coverByColor.get(barrierColor) ?? [];
+      eraseIds(barrierCoverIds);
+      chooseColorPanel(BARRIER_SLOT);
+
+      if (barrierCoverIds.length > 0) {
+        paintIds(barrierCoverIds);
+      }
+
+      const barrierPenComponents =
+        plan.penComponentsByColor.get(barrierColor);
+      if (barrierPenComponents) {
+        for (const component of barrierPenComponents) {
+          paintIds(component.pixels);
         }
       }
 
-      batchStart += 9;
-    }
-
-    // Temporary transparent barriers are now safe to remove:
-    // all fill components have already been consumed.
-    if (tempPainted) {
-      chooseTool('earse');
-      const tempPaths = buildStrokePaths(tempTransparentIds, context.curX, context.curY);
-      replayPaths(tempPaths, 'erase');
+      const barrierSlotByColor = new Map<number, number>([
+        [barrierColor, BARRIER_SLOT],
+      ]);
+      fillColorComponents(barrierSlotByColor, [barrierColor], false);
     }
 
     context.comments([
@@ -859,21 +932,15 @@ export const generateZigMacroScriptFill = (
     return context.lines.join('\n');
   };
 
+  const safeColoredCoverCost = totalCells + 1;
   const candidates: CoverCandidate[] = [
     {
-      name: 'mincut-t2',
-      selected: minCutCover(2),
-      usesTemporaryTransparent: true,
-    },
-    {
-      name: 'mincut-t3',
-      selected: minCutCover(3),
-      usesTemporaryTransparent: true,
+      name: 'mincut-colored',
+      selected: minCutCover(safeColoredCoverCost),
     },
     {
       name: 'colored-boundary',
       selected: boundaryCover(),
-      usesTemporaryTransparent: false,
     },
   ];
 
@@ -882,20 +949,53 @@ export const generateZigMacroScriptFill = (
 
   for (const candidate of candidates) {
     try {
-      const script = renderCandidate(candidate);
-      const score = estimateMacroTimeMs(script);
-      if (score < bestScore) {
-        bestScore = score;
-        bestScript = script;
+      const plan = analyzeCandidate(candidate);
+      const barrierCandidates =
+        plan.neededColors.length <= 9
+          ? [undefined]
+          : plan.neededColors
+              .slice()
+              .sort((a, b) => {
+                const aScore =
+                  (plan.coverByColor.get(a)?.length ?? 0) * 8 +
+                  (plan.penComponentsByColor.get(a)?.reduce(
+                    (sum, component) => sum + component.pixels.length,
+                    0
+                  ) ?? 0) +
+                  (plan.fillComponentsByColor.get(a)?.length ?? 0) * 16;
+                const bScore =
+                  (plan.coverByColor.get(b)?.length ?? 0) * 8 +
+                  (plan.penComponentsByColor.get(b)?.reduce(
+                    (sum, component) => sum + component.pixels.length,
+                    0
+                  ) ?? 0) +
+                  (plan.fillComponentsByColor.get(b)?.length ?? 0) * 16;
+                return aScore - bScore;
+              })
+              .slice(0, 3);
+
+      for (const barrierColor of barrierCandidates) {
+        const label =
+          barrierColor === undefined
+            ? candidate.name
+            : `${candidate.name}-barrier-${barrierColor}`;
+        try {
+          const script = renderCandidate(candidate, barrierColor);
+          const score = estimateMacroTimeMs(script);
+          if (score < bestScore) {
+            bestScore = score;
+            bestScript = script;
+          }
+        } catch (error) {
+          console.warn(`候选方案 ${label} 生成失败: ${String(error)}`);
+        }
       }
     } catch (error) {
-      context.comment(
-        `候选方案 ${candidate.name} 生成失败: ${String(error)}`
-      );
+      console.warn(`候选方案 ${candidate.name} 分析失败: ${String(error)}`);
     }
   }
 
-  // 最终与原有两种算法竞争，防止某些“高碎片图”上 fill-cut 反而变慢。
+  // 最终与原有两种算法竞争，防止某些高碎片图上 fill-cut 反而变慢。
   const baselineCandidates = [
     generateZigMacroScriptBySegment(options),
     generateZigMacroScriptDFS(options),

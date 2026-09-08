@@ -8,6 +8,7 @@ export interface MacroGeneratorOptions {
   pIndices: (number | null)[][];
   downDelay: number;
   upDelay: number;
+  uiDelay: number,
 };
 
 export type MacroGenerator = (
@@ -48,6 +49,7 @@ export interface ZigMacroScriptContext {
   readonly pIndices: (number | null)[][];
   readonly downDelay: number;
   readonly upDelay: number;
+  readonly uiDelay: number;
 
   readonly lines: string[];
 
@@ -57,7 +59,8 @@ export interface ZigMacroScriptContext {
   curTool: Tool,
 
   tap(button: string, space?: number): void;
-  tapMultiple(button: string, count: number): void;
+  tapUI(button: string, space?: number): void;
+  tapMultiple(button: string, count: number, tap: (button: string, space?: number)=>void): void;
   wait(ms: number): void;
   down(button: string): void;
   up(button: string): void;
@@ -123,10 +126,6 @@ export interface ZigMacroScriptContext {
    */
   chooseColorPanel(idx: number): void;
   /**
-   * 重置HSV颜色选色盘到左上角和(色域)最左边
-   */
-  resetHSVColorPanel(): void;
-  /**
    * 自动选择HSV颜色
    * @param slotIdx 面板颜色下标
    * @param colorIdx 离散颜色下标
@@ -150,6 +149,7 @@ export const createZigMacroScriptContext = (
     pIndices: options.pIndices,
     downDelay: options.downDelay,
     upDelay: options.upDelay,
+    uiDelay: options.uiDelay,
     lines: [],
     curX: 0,
     curY: 0,
@@ -157,16 +157,17 @@ export const createZigMacroScriptContext = (
     curTool: 'pen',
 
     tap: (button, space = 0) => context.lines.push(`${' '.repeat(space)}TAP ${options.downDelay}ms ${options.upDelay}ms ${button}`),
+    tapUI: (button, space = 0) => context.lines.push(`${' '.repeat(space)}TAP ${options.uiDelay}ms ${options.uiDelay}ms ${button}`),
 
-    tapMultiple: (button, count) => {
+    tapMultiple: (button, count, tap: (button: string, space?: number)=>void = context.tap) => {
       if (count <= 0) return;
       if (count === 1) {
-        context.tap(button);
+        tap(button);
         return;
       }
 
       context.lines.push(`REPEAT ${count}`);
-      context.tap(button, 2);
+      tap(button, 2);
       context.lines.push('END');
     },
 
@@ -199,15 +200,15 @@ export const createZigMacroScriptContext = (
 
       // reset pen size
       context.chooseTool('pen');
-      context.tapMultiple('X', 2);
-      context.tapMultiple('DPAD_LEFT', 2);
-      context.tapMultiple('A', 2);
+      context.tapMultiple('X', 2, context.tapUI);
+      context.tapMultiple('DPAD_LEFT', 2, context.tapUI);
+      context.tapMultiple('A', 2, context.tapUI);
 
       // reset earse size
       context.chooseTool('earse');
-      context.tapMultiple('X', 2);
-      context.tapMultiple('DPAD_LEFT', 2);
-      context.tapMultiple('A', 3);
+      context.tapMultiple('X', 2, context.tapUI);
+      context.tapMultiple('DPAD_LEFT', 2, context.tapUI);
+      context.tapMultiple('A', 3, context.tapUI);
 
       // reset to pen
       context.chooseTool('pen');
@@ -218,12 +219,13 @@ export const createZigMacroScriptContext = (
       const nextToolIdx = ToolIndex[tool];
       if (curToolIdx === nextToolIdx) return;
 
-      context.tap('X');
+      context.tapUI('X');
       const direction = curToolIdx > nextToolIdx ? 'DPAD_LEFT' : 'DPAD_RIGHT';
-      context.tapMultiple(direction, Math.abs(curToolIdx - nextToolIdx));
-      context.tap('A');
+      context.tapMultiple(direction, Math.abs(curToolIdx - nextToolIdx), context.tapUI);
+      context.tapUI('A');
       context.curTool = tool;
     },
+
     fill: () => {
       context.chooseTool('fill');
       context.tap('A');
@@ -250,15 +252,15 @@ export const createZigMacroScriptContext = (
     initColorPanel: () => {
       context.comment('--- 初始化调色板面板 ---');
 
-      context.tap('Y');
-      context.tapMultiple('DPAD_DOWN', 10);
-      context.tapMultiple('DPAD_UP', 8);
-      context.tap('Y');
-      context.tap('R');
-      context.tap('R');
-      context.tap('R');
+      context.tapUI('Y');
+      context.tapMultiple('DPAD_DOWN', 10, context.tapUI);
+      context.tapMultiple('DPAD_UP', 8, context.tapUI);
+      context.tapUI('Y');
+      context.tapUI('R');
+      context.tapUI('R');
+      context.tapUI('R');
       context.wait(100);
-      context.tap('A');
+      context.tapUI('A');
 
       context.curColorPanelIdx = 0;
     },
@@ -268,30 +270,16 @@ export const createZigMacroScriptContext = (
         return;
       }
 
-      context.tap('Y');
+      context.tapUI('Y');
 
       if (idx > context.curColorPanelIdx) {
-        context.tapMultiple('DPAD_DOWN', idx - context.curColorPanelIdx);
+        context.tapMultiple('DPAD_DOWN', idx - context.curColorPanelIdx, context.tapUI);
       } else {
-        context.tapMultiple('DPAD_UP', context.curColorPanelIdx - idx);
+        context.tapMultiple('DPAD_UP', context.curColorPanelIdx - idx, context.tapUI);
       }
 
       context.curColorPanelIdx = idx;
-      context.tap('A');
-    },
-
-    resetHSVColorPanel: () => {
-      context.comment('--- 复位 HSV 调色板 ---');
-
-      context.wait(100);
-      context.lines.push('STICK LEFT_STICK -100 +100');
-      context.wait(100);
-      context.lines.push('DOWN ZL');
-      context.wait(5000);
-      context.lines.push('UP ZL');
-      context.wait(100);
-      context.lines.push('RESET_STICK LEFT_STICK');
-      context.wait(100);
+      context.tapUI('A');
     },
 
     chooseHSVColor: (slotIdx, colorIdx) => {
@@ -317,9 +305,9 @@ export const createZigMacroScriptContext = (
       context.wait(100);
       context.chooseColorPanel(slotIdx);
       context.wait(100);
-      context.tap('Y');
+      context.tapUI('Y');
       context.wait(100);
-      context.tap('Y');
+      context.tapUI('Y');
       context.wait(100);
 
       context.comment('--- 复位 HSV 调色板 ---');
@@ -355,14 +343,6 @@ export const createZigMacroScriptContext = (
         hsv.vTicks = TOMODACHI_HSV_V_TICKS - hsv.vTicks;
       }
       context.lines.push(`STICK LEFT_STICK ${stickX}100 ${stickY}100`);
-      // // 左上
-      // context.lines.push('STICK LEFT_STICK -100 +100');
-      // // 左下
-      // context.lines.push('STICK LEFT_STICK -100 -100');
-      // // 右上
-      // context.lines.push('STICK LEFT_STICK +100 +100');
-      // // 右下
-      // context.lines.push('STICK LEFT_STICK +100 -100');
       context.wait(100);
       context.lines.push(`DOWN ${hResetButton}`);
       context.wait(5000);
@@ -375,32 +355,32 @@ export const createZigMacroScriptContext = (
       context.wait(100);
 
       context.comment('--- 调色 ---');
-      context.tapMultiple(hButton, hsv.hTicks);
+      context.tapMultiple(hButton, hsv.hTicks, context.tap);
       context.wait(100);
-      context.tapMultiple(sButton, hsv.sTicks);
+      context.tapMultiple(sButton, hsv.sTicks, context.tap);
       context.wait(100);
-      context.tapMultiple(vButton, hsv.vTicks);
+      context.tapMultiple(vButton, hsv.vTicks, context.tap);
       context.wait(100);
-      context.tap('A');
+      context.tapUI('A');
       context.wait(100);
       context.comment('--- 调色完毕 ---');
     },
 
-    goto: (direction, times) => context.tapMultiple(direction, times),
+    goto: (direction, times) => context.tapMultiple(direction, times, context.tap),
     moveTo: (targetX, targetY) => {
       const dx = targetX - context.curX;
       const dy = targetY - context.curY;
 
       if (dx > 0) {
-        context.tapMultiple('DPAD_RIGHT', dx);
+        context.tapMultiple('DPAD_RIGHT', dx, context.tap);
       } else if (dx < 0) {
-        context.tapMultiple('DPAD_LEFT', -dx);
+        context.tapMultiple('DPAD_LEFT', -dx, context.tap);
       }
 
       if (dy > 0) {
-        context.tapMultiple('DPAD_DOWN', dy);
+        context.tapMultiple('DPAD_DOWN', dy, context.tap);
       } else if (dy < 0) {
-        context.tapMultiple('DPAD_UP', -dy);
+        context.tapMultiple('DPAD_UP', -dy, context.tap);
       }
 
       context.curX = targetX;
