@@ -1,7 +1,7 @@
 import React, { useState, useRef, useMemo } from 'react';
 import './TomodachiLifeNormal.css';
 import { type PixelData, type RGBColor } from './color';
-import { MacroAlgorithmMap, type MacroAlgorithm, type MacroAlgorithmType } from './macroAlgorithm';
+import { MacroAlgorithmMap, type MacroAlgorithm, type MacroAlgorithmType } from './algorithms/macroAlgorithm';
 import { generateZigByteArray, loadImageFromZigByteArray } from './image';
 import ColorPickerModal from './ColorPickerModal';
 import ImageEditorModal from './ImageEditorModal';
