@@ -1,11 +1,17 @@
+import { calculateBytecodeWaitTime, compile } from "../../macroCompiler";
 import { rgbToTomodachiHSV, TOMODACHI_HSV_H_TICKS, TOMODACHI_HSV_S_TICKS, TOMODACHI_HSV_V_TICKS, type RGBColor } from "./color";
 
+export interface MacroGeneratorOptions {
+  w: number;
+  h: number;
+  palette: RGBColor[];
+  pIndices: (number | null)[][];
+  downDelay: number;
+  upDelay: number;
+};
+
 export type MacroGenerator = (
-  w: number,
-  h: number,
-  palette: RGBColor[],
-  pIndices: (number | null)[][],
-  delay: number
+  options: MacroGeneratorOptions
 ) => string;
 
 type Point = {
@@ -28,48 +34,10 @@ const directions = [
   { dx: 0, dy: -1, button: 'DPAD_UP' },
 ] as const;
 
-const estimateMacroTimeMs = (script: string, delay: number): number => {
-  const lines = script.split('\n');
-  let repeat = 1;
-  let total = 0;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) {
-      continue;
-    }
-
-    const repeatMatch = trimmed.match(/^REPEAT (\d+)$/);
-    if (repeatMatch) {
-      repeat = Number(repeatMatch[1]);
-      continue;
-    }
-
-    if (trimmed === 'END') {
-      repeat = 1;
-      continue;
-    }
-
-    const tapMatch = trimmed.match(/^TAP (\d+)ms (\d+)ms /);
-    if (tapMatch) {
-      total += (
-        Number(tapMatch[1]) + Number(tapMatch[2])
-      ) * repeat;
-      continue;
-    }
-
-    if (trimmed.startsWith('DOWN ') || trimmed.startsWith('UP ')) {
-      total += delay * repeat;
-      continue;
-    }
-
-    const waitMatch = trimmed.match(/^WAIT (\d+)ms$/);
-    if (waitMatch) {
-      total += Number(waitMatch[1]) * repeat;
-    }
-  }
-
-  return total;
+const estimateMacroTimeMs = (script: string): number => {
+  const bytecode = compile(script);
+  const {totalMs} = calculateBytecodeWaitTime(bytecode);
+  return totalMs;
 };
 
 export interface ZigMacroScriptContext {
@@ -77,7 +45,8 @@ export interface ZigMacroScriptContext {
   readonly h: number;
   readonly palette: RGBColor[];
   readonly pIndices: (number | null)[][];
-  readonly delay: number;
+  readonly downDelay: number;
+  readonly upDelay: number;
 
   readonly lines: string[];
 
@@ -171,25 +140,22 @@ export interface ZigMacroScriptContext {
 }
 
 const createZigMacroScriptContext = (
-  w: number,
-  h: number,
-  palette: RGBColor[],
-  pIndices: (number | null)[][],
-  delay: number
+  options: MacroGeneratorOptions
 ): ZigMacroScriptContext => {
   const context: ZigMacroScriptContext = {
-    w,
-    h,
-    palette,
-    pIndices,
-    delay,
+    w: options.w,
+    h: options.h,
+    palette: options.palette,
+    pIndices: options.pIndices,
+    downDelay: options.downDelay,
+    upDelay: options.upDelay,
     lines: [],
     curX: 0,
     curY: 0,
     curColorPanelIdx: 0,
     curTool: 'pen',
 
-    tap: (button, space = 0) => context.lines.push(`${' '.repeat(space)}TAP ${delay}ms ${delay}ms ${button}`),
+    tap: (button, space = 0) => context.lines.push(`${' '.repeat(space)}TAP ${options.downDelay}ms ${options.upDelay}ms ${button}`),
 
     tapMultiple: (button, count) => {
       if (count <= 0) return;
@@ -207,12 +173,12 @@ const createZigMacroScriptContext = (
 
     down: (button) => {
       context.lines.push(`DOWN ${button}`);
-      context.wait(delay);
+      context.wait(options.downDelay);
     },
 
     up: (button) => {
       context.lines.push(`UP ${button}`);
-      context.wait(delay);
+      context.wait(options.upDelay);
     },
 
     comment: (msg) => {
@@ -440,7 +406,7 @@ const createZigMacroScriptContext = (
       context.curY = targetY;
     },
 
-    getId: (x, y) => y * w + x,
+    getId: (x, y) => y * options.w + x,
 
     manhattanDistance: (a, b) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y),
 
@@ -464,11 +430,7 @@ const createZigMacroScriptContext = (
 };
 
 export const generateZigMacroScriptBySegment = (
-  w: number,
-  h: number,
-  palette: RGBColor[],
-  pIndices: (number | null)[][],
-  delay: number
+  options: MacroGeneratorOptions
 ): string => {
   type Segment = {
     a: Point;
@@ -507,9 +469,15 @@ export const generateZigMacroScriptBySegment = (
     v: number;
   };
 
-  const context = createZigMacroScriptContext(w, h, palette, pIndices, delay);
+  const context = createZigMacroScriptContext(options);
 
   const {
+    w,
+    h,
+    palette,
+    pIndices,
+    upDelay,
+    downDelay,
     goto,
     beginDraw,
     endDraw,
@@ -541,7 +509,7 @@ export const generateZigMacroScriptBySegment = (
     '==========================================',
     'Tomodachi Life 自动化绘制宏脚本',
     '线段优化策略',
-    `尺寸: ${w}x${h} | 颜色数: ${palette.length} | 延迟: ${delay}ms`,
+    `尺寸: ${w}x${h} | 颜色数: ${palette.length} | 延迟: ${upDelay}ms/${downDelay}ms`,
     '==========================================',
     ''
   ]);
@@ -1706,11 +1674,7 @@ export const generateZigMacroScriptBySegment = (
 };
 
 export const generateZigMacroScriptDFS = (
-  w: number,
-  h: number,
-  palette: RGBColor[],
-  pIndices: (number | null)[][],
-  delay: number
+  options: MacroGeneratorOptions
 ): string => {
   type Component = {
     pixels: Point[];
@@ -1722,9 +1686,15 @@ export const generateZigMacroScriptDFS = (
     deepest: number;
   };
 
-  const context = createZigMacroScriptContext(w, h, palette, pIndices, delay);
+  const context = createZigMacroScriptContext(options);
 
   const {
+    w,
+    h,
+    palette,
+    pIndices,
+    upDelay,
+    downDelay,
     goto,
     beginDraw,
     endDraw,
@@ -1762,7 +1732,7 @@ export const generateZigMacroScriptDFS = (
     'DFS 路径优化策略：',
     '1. 扫描各个颜色的所有连通块',
     '2. 一次性将一种颜色的所有连通块绘制完成, 之后再绘制下一个颜色',
-    `尺寸: ${w}x${h} | 颜色数: ${palette.length} | 延迟: ${delay}ms`,
+    `尺寸: ${w}x${h} | 颜色数: ${palette.length} | 延迟: ${upDelay}ms/${downDelay}`,
     '==========================================',
     ''
   ]);
@@ -2403,11 +2373,7 @@ export const generateZigMacroScriptDFS = (
 };
 
 export const generateZigMacroScriptFill = (
-  w: number,
-  h: number,
-  palette: RGBColor[],
-  pIndices: (number | null)[][],
-  delay: number
+  options: MacroGeneratorOptions
 ): string => {
   type BlankComponent = {
     colorIndex: number;
@@ -2428,15 +2394,15 @@ export const generateZigMacroScriptFill = (
     cap: number;
   };
 
-  const context = createZigMacroScriptContext(
+  const context = createZigMacroScriptContext(options);
+
+  const {
     w,
     h,
     palette,
     pIndices,
-    delay
-  );
-
-  const {
+    upDelay,
+    downDelay,
     beginDraw,
     endDraw,
     beginEarse,
@@ -2463,7 +2429,7 @@ export const generateZigMacroScriptFill = (
     '3. 隔离后的单色空白连通块直接使用 fill',
     '4. 透明像素可使用临时颜色作墙，全部 fill 完成后统一 erase',
     '5. 最终额外与 Segment / DFS 基线比较，选择预计耗时更短的方案',
-    `尺寸: ${w}x${h} | 颜色数: ${palette.length} | 延迟: ${delay}ms`,
+    `尺寸: ${w}x${h} | 颜色数: ${palette.length} | 延迟: 延迟: ${upDelay}ms/${downDelay}ms`,
     '==========================================',
     ''
   ]);
@@ -3287,7 +3253,7 @@ export const generateZigMacroScriptFill = (
   for (const candidate of candidates) {
     try {
       const script = renderCandidate(candidate);
-      const score = estimateMacroTimeMs(script, delay);
+      const score = estimateMacroTimeMs(script);
       if (score < bestScore) {
         bestScore = score;
         bestScript = script;
@@ -3301,12 +3267,12 @@ export const generateZigMacroScriptFill = (
 
   // 最终与原有两种算法竞争，防止某些“高碎片图”上 fill-cut 反而变慢。
   const baselineCandidates = [
-    generateZigMacroScriptBySegment(w, h, palette, pIndices, delay),
-    generateZigMacroScriptDFS(w, h, palette, pIndices, delay),
+    generateZigMacroScriptBySegment(options),
+    generateZigMacroScriptDFS(options),
   ];
 
   for (const baseline of baselineCandidates) {
-    const score = estimateMacroTimeMs(baseline, delay);
+    const score = estimateMacroTimeMs(baseline);
     if (score < bestScore) {
       bestScore = score;
       bestScript = baseline;
@@ -3321,11 +3287,7 @@ export const generateZigMacroScriptFill = (
 };
 
 export const generateZigMacroScriptLayerFill: MacroGenerator = (
-  w: number,
-  h: number,
-  palette: RGBColor[],
-  pIndices: (number | null)[][],
-  delay: number
+  options: MacroGeneratorOptions
 ): string => {
   type FillStep = {
     type: 'fill_block';
@@ -3343,7 +3305,16 @@ export const generateZigMacroScriptLayerFill: MacroGenerator = (
 
   type Step = FillStep | PenStep;
 
-  const context = createZigMacroScriptContext(w, h, palette, pIndices, delay);
+  const context = createZigMacroScriptContext(options);
+
+  const {
+    w,
+    h,
+    palette,
+    pIndices,
+    upDelay,
+    downDelay,
+  } = context;
   const totalCells = w * h;
 
   context.comments([
@@ -3354,7 +3325,7 @@ export const generateZigMacroScriptLayerFill: MacroGenerator = (
     '2. 提取最外层轮廓的主导色作为当前基底，构建闭合隔离墙',
     '3. 向隔离墙内统一 Fill，临时覆盖上层细节',
     '4. 递归处理剩余像素，将细节颜色直接叠加在已 Fill 的基底上',
-    `尺寸: ${w}x${h} | 颜色数: ${palette.length} | 延迟: ${delay}ms`,
+    `尺寸: ${w}x${h} | 颜色数: ${palette.length} | 延迟: ${upDelay}ms/${downDelay}ms`,
     '==========================================',
     ''
   ]);

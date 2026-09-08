@@ -17,7 +17,8 @@ function TomodachiLifeNormal({
 }: TomodachiLifeNormalProps) {
   const [cropWidth, setCropWidth] = useState<number>(256);
   const [cropHeight, setCropHeight] = useState<number>(256);
-  const [delayMs, setDelayMs] = useState<number>(100);
+  const [downDelayMs, setDownDelayMs] = useState<number>(100);
+  const [upDelayMs, setUpDelayMs] = useState<number>(100);
 
   const [originalImage, setOriginalImage] = useState<HTMLImageElement | null>(null);
   const [croppedImage, setCroppedImage] = useState<HTMLImageElement | null>(null);
@@ -36,7 +37,7 @@ function TomodachiLifeNormal({
 
   const [scale, setScale] = useState<number>(1);
   const [minScale, setMinScale] = useState<number>(0.1);
-  const [maxScale, setMaxScale] = useState<number>(10);
+  const [maxScale, setMaxScale] = useState<number>(100);
   const [imgOffset, setImgOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
@@ -299,12 +300,20 @@ function TomodachiLifeNormal({
   }, [byteArray]);
 
   const finalScript = useMemo(() => {
-    const script = macroAlgorithm.generator(cropWidth, cropHeight, currentPalette, pixelIndices, delayMs);
+    // cropWidth, cropHeight, currentPalette, pixelIndices, delayMs
+    const script = macroAlgorithm.generator({
+      w: cropWidth,
+      h: cropHeight,
+      palette: currentPalette,
+      pIndices: pixelIndices,
+      downDelay: downDelayMs,
+      upDelay: upDelayMs,
+    });
     if (compressScript) {
       return "# 已压缩\n" + compressMacro(script.split("\n")).join("\n");
     }
     return script;
-  }, [cropWidth, cropHeight, delayMs, currentPalette, pixelIndices, macroAlgorithm, compressScript]);
+  }, [cropWidth, cropHeight, downDelayMs, upDelayMs, currentPalette, pixelIndices, macroAlgorithm, compressScript]);
 
   const VIEWPORT_WIDTH = Math.max(360, cropWidth + 80);
   const VIEWPORT_HEIGHT = Math.max(360, cropHeight + 80);
@@ -417,17 +426,28 @@ function TomodachiLifeNormal({
                 </label>
               </div>
               <div className="m3-controls-bar">
-                <label className="m3-input-field">
+                <span className="m3-input-field">
                   缩放:
-                  <input
-                    type="range"
-                    min={minScale}
-                    max={maxScale}
-                    step={(maxScale - minScale) / 100}
-                    value={scale}
-                    onChange={(e) => updateScaleWithCenter(parseFloat(e.target.value))}
-                  />
-                </label>
+                  <div className="m3-input-field" style={{display: "flex", flexDirection: "column"}}>
+                    <input
+                      className='m3-input'
+                      style={{width: "80%"}}
+                      type="number"
+                      value={scale}
+                      onChange={(e) => updateScaleWithCenter(parseFloat(e.target.value))}
+                    />
+                    <input
+                      className='m3-input'
+                      type="range"
+                      min={minScale}
+                      max={maxScale}
+                      step={(maxScale - minScale) / 100}
+                      value={scale}
+                      onChange={(e) => updateScaleWithCenter(parseFloat(e.target.value))}
+                    />
+                  </div>
+                </span>
+                
               </div>
               <div className="m3-controls-bar">
                 <button
@@ -586,13 +606,26 @@ function TomodachiLifeNormal({
                     </label>
 
                     <label className="m3-input-field">
-                      延迟:
+                      按下延迟:
                       <input
                         type="number"
                         min="10"
                         max="1000"
-                        value={delayMs}
-                        onChange={(e) => setDelayMs(parseInt(e.target.value) || 100)}
+                        value={downDelayMs}
+                        onChange={(e) => setDownDelayMs(parseInt(e.target.value) || 100)}
+                        className="m3-input"
+                        style={{ width: '100px' }}
+                      />
+                    </label>
+
+                    <label className="m3-input-field">
+                      弹起延迟:
+                      <input
+                        type="number"
+                        min="10"
+                        max="1000"
+                        value={upDelayMs}
+                        onChange={(e) => setUpDelayMs(parseInt(e.target.value) || 100)}
                         className="m3-input"
                         style={{ width: '100px' }}
                       />
